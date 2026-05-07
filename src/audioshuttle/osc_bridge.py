@@ -116,6 +116,7 @@ class ReaperOSC:
         # Internal state
         self._state = DAWState()
         self._last_feedback_time: float = time.time()  # Grace period on startup
+        self._reaper_seen: bool = False  # True after first real feedback from Reaper
         self._message_log: deque[tuple[str, Any]] = deque(maxlen=500)
         # Track volume dB values (track_num -> dB float) for conversion
         self._track_volume_db: dict[int, float] = {}
@@ -217,9 +218,11 @@ class ReaperOSC:
         try:
             self._client.send_message(address, list(args))
             logger.debug("Sent: %s %s", address, args)
-            # Update feedback time on successful send — if we can send to
-            # Reaper's port, the connection is at least partially alive.
-            self._last_feedback_time = time.time()
+            # If Reaper has been seen before, treat successful sends as
+            # connection evidence (Reaper's OSC only sends feedback on
+            # state changes, not in response to queries).
+            if self._reaper_seen:
+                self._last_feedback_time = time.time()
             return CommandResult(
                 success=True,
                 address=address,
@@ -477,6 +480,7 @@ class ReaperOSC:
             self._disconnected_since = None
 
         self._last_feedback_time = now
+        self._reaper_seen = True
         self._message_log.append((address, args))
         logger.debug("Recv: %s %s", address, args)
 

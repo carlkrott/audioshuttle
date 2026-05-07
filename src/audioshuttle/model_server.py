@@ -56,6 +56,10 @@ class ModelServer:
             )
             return True
 
+        # Kill any orphaned process on the model port before starting.
+        # This prevents "address already in use" errors from previous runs.
+        self._cleanup_orphaned_process()
+
         s = self._settings
         env = os.environ.copy()
         env["HIP_VISIBLE_DEVICES"] = str(s.model_gpu_device)
@@ -208,6 +212,37 @@ class ModelServer:
         """Extract port from model_api_url."""
         parsed = urlparse(self._settings.model_api_url)
         return parsed.port or 8092
+
+    def _cleanup_orphaned_process(self) -> None:
+        """Kill any orphaned llama-server process on the model port.
+
+        When AudioShuttle is killed without clean shutdown, the llama-server
+        subprocess can survive. A new start would fail to bind the port.
+        This finds and kills any existing process before starting a fresh one.
+        """
+        port = self._extract_port()
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["fuser", f"{port}/tcp"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.stdout.strip():
+                pids = result.stdout.strip().split()
+                for pid_str in pids:
+                    try:
+                        pid = int(pid_str.strip())
+                        if pid != os.getpid():
+                            logger.info(
+                                "Killing orphaned process on port %d (pid %d)",
+                                port, pid,
+                            )
+                            os.kill(pid, 9)
+                            time.sleep(0.5)
+                    except (ValueError, ProcessLookupError):
+                        pass
+        except Exception as e:
+            logger.debug("Could not check for orphaned processes: %s", e)
 
     def __repr__(self) -> str:
         status = "running" if self.is_running else "stopped"

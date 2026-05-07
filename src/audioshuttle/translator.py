@@ -36,41 +36,36 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "toggle_metronome": {},
 }
 
-SYSTEM_PROMPT = """You are AudioShuttle, an AI assistant that translates natural language commands into DAW control actions for Reaper.
+SYSTEM_PROMPT = """You translate natural language DAW commands into structured JSON tool calls.
 
-Given the current DAW state and a user command, output a JSON object with the tool to call and its arguments.
+Output ONLY a JSON object: {"tool": "<tool_name>", "args": {<key>: <value>}}
 
-Output ONLY valid JSON, no markdown, no explanation:
-{"tool": "<tool_name>", "args": {<key>: <value>}}
-
-Available tools and their EXACT required arguments:
-- transport_control: {"action": "play"|"stop"|"record"|"pause"}
-- transport_seek: {"position_seconds": <float>}
-- set_track_volume: {"track": <int>, "volume": <float 0.0-1.0>}
-- set_track_mute: {"track": <int>, "mute": <bool>}
-- set_track_solo: {"track": <int>, "solo": <bool>}
-- set_track_pan: {"track": <int>, "pan": <float -1.0 to 1.0>}
-- set_master_volume: {"volume": <float 0.0-1.0>}
-- set_master_pan: {"pan": <float -1.0 to 1.0>}
-- set_fx_param: {"track": <int>, "fx": <int>, "param": <int>, "value": <float>}
-- fx_bypass: {"track": <int>, "fx": <int>, "bypass": <bool>}
-- trigger_action: {"command_id": <int>}
-- set_track_arm: {"track": <int>, "arm": <bool>}
-- toggle_repeat: {}
-- toggle_metronome: {}
-- list_tracks: {} / get_transport: {} / get_daw_state: {} / get_track_count: {}
+Available tools:
+- transport_control(action: "play"|"stop"|"record"|"pause")
+- set_track_volume(track: int, volume: float 0.0-1.0)
+- set_track_mute(track: int, mute: bool)
+- set_track_solo(track: int, solo: bool)
+- set_track_pan(track: int, pan: float -1.0 to 1.0)
+- set_master_volume(volume: float)
+- set_master_pan(pan: float)
+- set_fx_param(track: int, fx: int, param: int, value: float)
+- fx_bypass(track: int, fx: int, bypass: bool)
+- trigger_action(command_id: int)
+- set_track_arm(track: int, arm: bool)
+- toggle_repeat()
+- toggle_metronome()
+- list_tracks()
+- get_transport()
+- get_daw_state()
+- get_track_count()
 
 Rules:
-- Match track NAMES case-insensitively to find the track NUMBER from the DAW state
-- Include ALL required arguments for the chosen tool — do NOT omit any
-- "mute X" means mute=True, "unmute X" means mute=False
-- "solo X" means solo=True, "unsolo X" means solo=False
-- Volume: "turn up/increase" = 0.85, "turn down/decrease" = 0.5, "normal" = 0.75
-- Use the exact key names shown above (e.g. "volume" not "value" for set_track_volume)
+- Match track NAMES to find track NUMBER from the DAW state
+- "mute X" means mute=true, "unmute X" means mute=false
+- Volume: "turn up/increase" ≈ 0.85, "turn down/decrease" ≈ 0.5, "normal" ≈ 0.75
 - Track numbers start at 1
-- For ambiguous commands: {"error": "ambiguous", "message": "what's unclear"}
-- For unrecognized commands: {"error": "unclear", "message": "suggestion"}
-- Do NOT output anything except the JSON object"""
+- FX and parameter indices are 0-based
+"""
 
 
 def update_system_prompt(new_prompt: str) -> None:
@@ -114,18 +109,23 @@ class IntentTranslator:
     def _translate_with_model(
         self, user_input: str, daw_state: DAWState
     ) -> TranslationResult:
-        """Use E2B model to translate command."""
-        state_desc = self._format_daw_state(daw_state)
-        tools_list = ", ".join(sorted(TOOL_SCHEMAS.keys()))
+        """Use E2B model to translate command.
 
+        Uses a single user message (no system message) because Gemma E2B
+        returns empty responses when given a strict JSON system prompt.
+        Instructions and DAW state go directly in the user message.
+        """
+        state_desc = self._format_daw_state(daw_state)
+
+        # Single user message with everything — Gemma E2B works best this way
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": (
+                    f"{SYSTEM_PROMPT}\n\n"
                     f"Current DAW state:\n{state_desc}\n\n"
-                    f"Available tools: {tools_list}\n\n"
-                    f"User command: {user_input}"
+                    f"User command: {user_input}\n\n"
+                    f"Respond with only the JSON object."
                 ),
             },
         ]
@@ -365,11 +365,14 @@ class IntentTranslator:
         if state.tracks:
             lines.append("Tracks:")
             for t in state.tracks:
+                name = t.name or f"Track {t.track_number}"
                 lines.append(
-                    f"  {t.track_number}. {t.name or 'unnamed'} "
+                    f"  {t.track_number}. {name} "
                     f"(vol={t.volume:.2f}, pan={t.pan:.2f}, "
                     f"mute={t.mute}, solo={t.solo})"
                 )
+        elif state.track_count > 0:
+            lines.append(f"Track count: {state.track_count} (names not available, use track numbers)")
         lines.append(
             f"Transport: {'playing' if state.transport.playing else 'stopped'}"
             f"{' (recording)' if state.transport.recording else ''}"
@@ -382,13 +385,56 @@ class IntentTranslator:
 
     @staticmethod
     def _resolve_track_name(name: str, state: DAWState) -> int | None:
-        """Resolve a track name (case-insensitive) to a track number."""
+        """Resolve a track name (case-insensitive) to a track number.
+
+        Tries exact match, then partial match, then ordinal words.
+        Falls back to Nth track if name is a common track label (drums, bass, etc.)
+        and there are tracks available.
+        """
         name_lower = name.lower()
+
+        # Exact match
         for t in state.tracks:
-            if t.name.lower() == name_lower:
+            if t.name and t.name.lower() == name_lower:
                 return t.track_number
+
         # Partial match
         for t in state.tracks:
-            if name_lower in t.name.lower():
+            if t.name and name_lower in t.name.lower():
                 return t.track_number
+
+        # Ordinal words: "first" = 1, "second" = 2, etc.
+        ordinals = {
+            "first": 1, "1st": 1,
+            "second": 2, "2nd": 2,
+            "third": 3, "3rd": 3,
+            "fourth": 4, "4th": 4,
+            "fifth": 5, "5th": 5,
+            "sixth": 6, "6th": 6,
+            "seventh": 7, "7th": 7,
+            "eighth": 8, "8th": 8,
+        }
+        if name_lower in ordinals:
+            track_num = ordinals[name_lower]
+            if any(t.track_number == track_num for t in state.tracks):
+                return track_num
+
+        # Common instrument names -> position in a typical rock/pop project
+        # Drums=1, Bass=2, Vocals=3, Guitar=4, Synth/Keys=5
+        common_instruments = {
+            "drums": 1, "drum": 1, "kick": 1,
+            "bass": 2,
+            "vocals": 3, "vocal": 3, "voice": 3, "singing": 3,
+            "guitar": 4, "guitars": 4,
+            "synth": 5, "synths": 5, "keys": 5, "keyboard": 5, "piano": 5,
+        }
+        if name_lower in common_instruments:
+            track_num = common_instruments[name_lower]
+            # Only use this if the track exists AND has no name (unnamed)
+            for t in state.tracks:
+                if t.track_number == track_num:
+                    if not t.name or t.name.lower() == "unnamed":
+                        return track_num
+                    break  # Track has a real name, don't override
+
         return None
