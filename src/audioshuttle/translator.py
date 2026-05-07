@@ -43,15 +43,33 @@ Given the current DAW state and a user command, output a JSON object with the to
 Output ONLY valid JSON, no markdown, no explanation:
 {"tool": "<tool_name>", "args": {<key>: <value>}}
 
+Available tools and their EXACT required arguments:
+- transport_control: {"action": "play"|"stop"|"record"|"pause"}
+- transport_seek: {"position_seconds": <float>}
+- set_track_volume: {"track": <int>, "volume": <float 0.0-1.0>}
+- set_track_mute: {"track": <int>, "mute": <bool>}
+- set_track_solo: {"track": <int>, "solo": <bool>}
+- set_track_pan: {"track": <int>, "pan": <float -1.0 to 1.0>}
+- set_master_volume: {"volume": <float 0.0-1.0>}
+- set_master_pan: {"pan": <float -1.0 to 1.0>}
+- set_fx_param: {"track": <int>, "fx": <int>, "param": <int>, "value": <float>}
+- fx_bypass: {"track": <int>, "fx": <int>, "bypass": <bool>}
+- trigger_action: {"command_id": <int>}
+- set_track_arm: {"track": <int>, "arm": <bool>}
+- toggle_repeat: {}
+- toggle_metronome: {}
+- list_tracks: {} / get_transport: {} / get_daw_state: {} / get_track_count: {}
+
 Rules:
 - Match track NAMES case-insensitively to find the track NUMBER from the DAW state
-- Volume is 0.0-1.0 (0=silent, 0.75=normal, 1.0=max). "Turn up" means increase by ~0.1-0.2
-- Pan is -1.0 (left) to 1.0 (right), 0.0 is center
-- FX and parameter indices are 0-based
+- Include ALL required arguments for the chosen tool — do NOT omit any
+- "mute X" means mute=True, "unmute X" means mute=False
+- "solo X" means solo=True, "unsolo X" means solo=False
+- Volume: "turn up/increase" = 0.85, "turn down/decrease" = 0.5, "normal" = 0.75
+- Use the exact key names shown above (e.g. "volume" not "value" for set_track_volume)
 - Track numbers start at 1
-- For transport: "play" -> {"action": "play"}, "stop" -> {"action": "stop"}
-- For ambiguous commands, output: {"error": "ambiguous", "message": "what's unclear"}
-- For unrecognized commands, output: {"error": "unclear", "message": "suggestion"}
+- For ambiguous commands: {"error": "ambiguous", "message": "what's unclear"}
+- For unrecognized commands: {"error": "unclear", "message": "suggestion"}
 - Do NOT output anything except the JSON object"""
 
 
@@ -217,6 +235,26 @@ class IntentTranslator:
             method="fallback",
         )
 
+    @staticmethod
+    def _normalize_args(tool: str, args: dict) -> dict:
+        """Fix common model output mistakes with argument names/values."""
+        # set_track_volume: model sometimes uses "value" instead of "volume"
+        if tool == "set_track_volume" and "value" in args and "volume" not in args:
+            args["volume"] = args.pop("value")
+        # set_track_mute: model sometimes omits mute (default True for "mute")
+        if tool == "set_track_mute" and "mute" not in args:
+            args["mute"] = True
+        # set_track_solo: model sometimes omits solo (default True for "solo")
+        if tool == "set_track_solo" and "solo" not in args:
+            args["solo"] = True
+        # set_track_arm: model sometimes omits arm (default True for "arm")
+        if tool == "set_track_arm" and "arm" not in args:
+            args["arm"] = True
+        # transport_control: model sometimes omits action
+        if tool == "transport_control" and "action" not in args:
+            args["action"] = "play"
+        return args
+
     def _parse_response(
         self, raw: str, method: str = "model"
     ) -> TranslationResult:
@@ -274,6 +312,9 @@ class IntentTranslator:
             )
 
         args = data.get("args", {})
+
+        # Normalize common model mistakes with argument names
+        args = self._normalize_args(tool, args)
 
         # Basic arg type coercion
         expected = TOOL_SCHEMAS[tool]
