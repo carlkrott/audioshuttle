@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Status</h2>
+<div class="status-row">
+    <div class="status-item">
+        <span class="label">DAW:</span>
+        {% if status.daw_connected %}
+        <span class="badge badge-ok">{{ status.daw_name }} Connected</span>
+        {% else %}
+        <span class="badge badge-error">{{ status.daw_name }} Disconnected</span>
+        {% endif %}
+    </div>
+    <div class="status-item">
+        <span class="label">MCP:</span>
+        <span class="badge badge-ok">Running</span>
+    </div>
+    <div class="status-item">
+        <span class="label">Model:</span>
+        {% if status.model_state == 'running' %}
+        <span class="badge badge-ok">Loaded</span>
+        {% elif status.model_state == 'loading' %}
+        <span class="badge badge-warn">Loading</span>
+        {% else %}
+        <span class="badge badge-off">Disabled</span>
+        {% endif %}
+    </div>
+    <div class="status-item">
+        <span class="label">GPU:</span>
+        <span class="badge {% if status.gpu_vram.vram_used_pct < 80 %}badge-ok{% else %}badge-warn{% endif %}">
+            {{ status.gpu_vram.vram_used_mb }} / {{ status.gpu_vram.vram_total_mb }} MB ({{ status.gpu_vram.vram_used_pct }}%)
+        </span>
+    </div>
+    <div class="status-item">
+        <span class="label">Detected:</span>
+        <span class="badge {% if status.detection.detected != 'none' %}badge-ok{% else %}badge-off{% endif %}">
+            {{ status.detection.detected }}
+        </span>
+    </div>
+</div>
+
+<h2>Error Log</h2>
+{% if errors %}
+<pre id="error-log">{% for entry in errors|reverse %}[{{ entry.timestamp[:19] }}] {{ entry.level|upper }}: {{ entry.message }}
+{% endfor %}</pre>
+{% else %}
+<p class="empty">No errors logged</p>
+{% endif %}
+{% endblock %}

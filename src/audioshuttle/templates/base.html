@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AudioShuttle</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        nav {
+            background: #16213e;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            border-bottom: 2px solid #0f3460;
+        }
+        nav .brand {
+            font-weight: 700;
+            font-size: 18px;
+            color: #0f9b58;
+            margin-right: 16px;
+        }
+        nav a {
+            color: #888;
+            text-decoration: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        nav a:hover { color: #eee; background: #0f3460; }
+        nav a.active { color: #fff; background: #0f3460; }
+        .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .badge-ok { background: #0f9b58; color: #fff; }
+        .badge-error { background: #ea4335; color: #fff; }
+        .badge-warn { background: #fbbc04; color: #1a1a2e; }
+        .badge-off { background: #555; color: #aaa; }
+        .status-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .status-item { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+        .status-item .label { color: #888; }
+        pre {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            max-height: 400px;
+            overflow-y: auto;
+            color: #c9d1d9;
+        }
+        h2 { margin: 20px 0 10px; font-size: 16px; color: #ccc; }
+        .empty { color: #555; font-style: italic; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">AudioShuttle</span>
+        <a href="/" class="{{ 'active' if request.url.path == '/' }}">Home</a>
+        <a href="/input" class="{{ 'active' if request.url.path == '/input' }}">Input</a>
+        <a href="/output" class="{{ 'active' if request.url.path == '/output' }}">Output</a>
+    </nav>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
