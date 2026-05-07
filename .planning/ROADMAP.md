@@ -5,12 +5,12 @@
 ---
 
 ### Phase 1: Foundation (Day 1-3)
-**Goal:** Reaper running on PCS, OSC communication working, project skeleton
+**Goal:** Reaper running locally, OSC communication working, project skeleton
 
 **Plans:** TBD
-- Install Reaper on PCS, enable OSC control surface
+- Install Reaper on this machine, enable OSC control surface
 - Python project skeleton with fastmcp + python-osc
-- Verify OSC connectivity over Tailscale (7995x → PCS)
+- Verify OSC connectivity (localhost loopback)
 - Basic MCP server that can send/receive OSC to Reaper
 
 ---
@@ -65,7 +65,7 @@
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | ROCm fails on 6950 XT | Can't run E2B on GPU | Fall back to Vulkan backend or CPU |
-| Reaper OSC over Tailscale has latency | Commands feel sluggish | Test early, use TCP mode if needed |
 | E2B prompt engineering insufficient | Commands mistranslated | Add validation layer, fallback to direct tool calls |
-| PCS unavailable | No DAW to control | Test with Reaper on this machine as backup |
+| Reaper not available on Linux | No DAW to control | Reaper has native Linux build; alternative: use Carla |
+| SSL12 not detected | No voice input | Use system mic or pre-recorded audio for demo |
 | 12 days too tight | Incomplete demo | Ruthless scope: P0 only, everything else is stretch |

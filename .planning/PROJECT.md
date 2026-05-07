@@ -46,11 +46,12 @@ AudioShuttle is an open-source MCP server + standalone application that lets **a
 │  │  Setup wizard, status, config, logs       │      │
 │  └───────────────────────────────────────────┘      │
 └────────────────────┬────────────────────────────────┘
-                     │ OSC over Tailscale (UDP)
+                     │ OSC (localhost)
                      ▼
 ┌─────────────────────────────────────────────────────┐
-│              Reaper DAW (PCS Machine)                 │
+│              Reaper DAW (same machine)                │
 │  Multi-track project, plugins, routing               │
+│  OSC control surface enabled (default port 8000)     │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -85,7 +86,7 @@ AudioShuttle is an open-source MCP server + standalone application that lets **a
 |-----------|-----------|-----|
 | Server | Python 3.14 + FastAPI | 12-day timeline, MCP SDK, async |
 | MCP Server | `mcp` or `fastmcp` (PyPI) | Standard MCP protocol |
-| DAW Control | python-osc → Reaper OSC | Network-native, full control |
+| DAW Control | python-osc → Reaper OSC (localhost) | Zero latency, full control |
 | Embedded Model | llama.cpp GPU server (RX 6950 XT) | Already have llama-server binary |
 | Model | Gemma 4 E2B UD-Q4_K_XL (3GB) | Fast, small, fits in 16GB VRAM |
 | Chat Interface | Gemma 4 E4B (port 8090, CPU CCD0) | Already running |
@@ -96,17 +97,21 @@ AudioShuttle is an open-source MCP server + standalone application that lets **a
 
 ## Hardware Layout
 
-| Machine | Role | Specs |
-|---------|------|-------|
-| **7995x (this)** | AudioShuttle server + models | 7995x CPU, RX 6950 XT 16GB, 16GB RAM per CCD |
-| **PCS** | Reaper DAW | Needs Tailscale connectivity |
-| **SSL12** | Audio I/O for voice | USB, mic input for Whisper STT |
+| Resource | Role | Location |
+|----------|------|----------|
+| **7995x CPU CCD0** | Gemma E4B chat interface | localhost:8090 (already running) |
+| **7995x CPU CCD1** | AudioShuttle server + FastAPI | Python process |
+| **RX 6950 XT (16GB)** | Gemma E2B domain expert | llama-server GPU |
+| **Reaper DAW** | Audio production, OSC target | Same machine, localhost OSC |
+| **SSL12** | Audio I/O for voice (Whisper STT) | USB interface |
+
+**Everything runs on this machine.** No network dependency for the demo.
 
 ## Key Constraints
 
 - **12-day deadline** — scope ruthlessly, demo-first
 - **E2B on GPU via llama.cpp** — ROCm/Vulkan on RX 6950 XT
-- **Reaper on PCS** — connected via Tailscale OSC
+- **Reaper on this machine** — localhost OSC, no network needed
 - **Prompt engineering first, fine-tuning later** — system prompt + MCP tool schema
 - **Not a DAW replacement** — background bridge service, not a workflow UI
 - **Web UI is for setup/status only** — no track faders, no mixer view

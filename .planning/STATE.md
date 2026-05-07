@@ -29,25 +29,26 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Critical Context
 
+- **Everything runs on this machine** — Reaper + AudioShuttle + models, all localhost
 - **E4B on CCD0 (port 8090)** running as CPU inference with 6.8GB RSS, `-ngl 99` with `HIP_VISIBLE_DEVICES=0` (Raphael iGPU, not actually used for GPU layers)
 - **RX 6950 XT completely free** — 16368 MB VRAM, only 16 MB used. Can easily run E2B (3GB model)
-- **PCS machine not yet confirmed** — need to identify which network host will run Reaper
 - **ROCm installed** at /opt/rocm, rocm-smi works
 - **No pip packages installed yet** for this project (mcp, python-osc, fastapi all need install)
+- **Reaper needs installing** on this machine
 
 ## Decisions
 
 - **Python over Rust** for 12-day timeline
 - **Prompt engineering first**, LoRA fine-tuning post-hackathon
 - **Reaper as DAW** (free, scriptable, OSC support)
-- **OSC over Tailscale** for DAW control (not direct MIDI)
+- **Everything on this machine** — localhost OSC, no network dependency
 - **Web UI + tray** for setup/status (not a mixing console)
 - **fastmcp** for MCP server implementation
 - **Gemma E2B Q4_K_XL** as embedded domain expert model
 
 ## Blockers/Concerns
 
-- PCS machine needs Reaper installed and OSC enabled
+- Reaper needs to be installed on this machine
 - ROCm GPU inference on RX 6950 XT needs testing (may need Vulkan fallback)
 - SSL12 audio interface not detected by WirePlumber (affects STT)
 - No fine-tuning in v1 — relies entirely on prompt engineering quality
