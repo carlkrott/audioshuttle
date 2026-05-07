@@ -105,11 +105,18 @@ All artifacts: EXISTS ✓, SUBSTANTIVE ✓ (min 3 lines for __init__.py, all oth
 - User confirmed: "just saw them working! amazing work!!"
 - **VERDICT: PASS**
 
-### 2. MCP stdio Transport Test
+### 2. MCP stdio Transport Test ✅ VERIFIED 2026-05-07
 
-**Test:** Run `echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | .venv/bin/python -m audioshuttle.cli --transport stdio`
-**Expected:** JSON response listing 8 tools
-**Why human:** Requires running the MCP server in stdio mode which is interactive
+**Test:** Pipe JSON-RPC messages into `python -m audioshuttle.cli --transport stdio`
+**Result:** Full MCP protocol handshake + tool calls work
+**Details:**
+- `initialize` handshake: Server responds with capabilities, name "AudioShuttle", instructions ✅
+- `tools/list`: Returns all 8 tools with names, descriptions, and input schemas ✅
+- `tools/call transport_control(play)`: Returns `{"success":true,"action":"play"}` ✅
+- `tools/call get_transport`: Returns transport state JSON ✅
+- `tools/call transport_control(stop)`: Returns success ✅
+- All responses valid JSON-RPC 2.0 with correct IDs
+- **VERDICT: PASS**
 
 ### 3. SSE Transport Test
 
