@@ -46,6 +46,8 @@ class ReaperOSC:
         self._state = DAWState()
         self._last_feedback_time: float = 0.0
         self._message_log: deque[tuple[str, Any]] = deque(maxlen=500)
+        # Track volume dB values (track_num -> dB float) for conversion
+        self._track_volume_db: dict[int, float] = {}
 
         # Feedback listener
         self._dispatcher = osc_dispatcher.Dispatcher()
@@ -178,15 +180,21 @@ class ReaperOSC:
 
     # ── State discovery ─────────────────────────────────────────
 
-    def refresh_state(self) -> DAWState:
-        """Probe Reaper for current state by requesting track info."""
+    def refresh_state(self, wait: float = 0.5) -> DAWState:
+        """Probe Reaper for current state by requesting track info.
+
+        Args:
+            wait: Seconds to wait for feedback responses (default 0.5s).
+        """
         # Send requests that trigger Reaper feedback
         for i in range(1, 9):
             self.send_command(f"/track/{i}/name")
             self.send_command(f"/track/{i}/volume")
             self.send_command(f"/track/{i}/mute")
             self.send_command(f"/track/{i}/solo")
+            self.send_command(f"/track/{i}/pan")
         self.send_command("/master/volume")
+        time.sleep(wait)
         return self._state
 
     def get_track_count(self) -> int:
@@ -240,7 +248,19 @@ class ReaperOSC:
                 if attr == "name" and isinstance(val, str):
                     track.name = val
                 elif attr == "volume":
-                    track.volume = float(val)
+                    # Reaper sends volume feedback as /track/N/volume/db
+                    if len(parts) >= 4 and parts[3] == "db":
+                        # Convert dB to normalized 0.0-1.0 range
+                        # Reaper range: ~-60dB (min) to +12dB (max)
+                        db_val = float(val)
+                        self._track_volume_db[track_num] = db_val
+                        track.volume = self._db_to_normalized(db_val)
+                    elif len(parts) >= 4 and parts[3] == "str":
+                        # String representation, skip
+                        pass
+                    else:
+                        # Normalized volume (0.0-1.0) — direct from feedback
+                        track.volume = float(val)
                 elif attr == "mute":
                     track.mute = bool(val)
                 elif attr == "solo":
@@ -249,6 +269,20 @@ class ReaperOSC:
                     track.pan = float(val)
             except (ValueError, IndexError):
                 pass
+
+    @staticmethod
+    def _db_to_normalized(db: float) -> float:
+        """Convert Reaper dB value to normalized 0.0-1.0 range.
+
+        Reaper's volume fader: -inf dB -> 0.0, 0 dB -> ~0.75, +12 dB -> 1.0
+        Approximate mapping using exponential scale.
+        """
+        if db <= -60.0:
+            return 0.0
+        # Reaper uses: normalized = 10^(dB/20) scaled to 0-1
+        # At 0dB, normalized ≈ 0.75 (Reaper's internal scaling)
+        # Simple approximation: map -60..+12 to 0..1
+        return max(0.0, min(1.0, (db + 60.0) / 72.0))
 
     def _get_or_create_track(self, track_num: int) -> TrackState:
         """Get existing track or create new one in state."""
