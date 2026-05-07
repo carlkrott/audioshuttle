@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>System Prompt</h2>
+{% if saved %}
+<p style="color: #0f9b58; font-weight: 600; margin-bottom: 12px;">✓ Saved</p>
+{% endif %}
+<form method="POST" action="/input/system-prompt">
+    <textarea name="system_prompt" rows="20" style="width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; resize: vertical;">{{ system_prompt }}</textarea>
+    <div style="margin-top: 8px;">
+        <button type="submit" style="background: #0f9b58; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Save</button>
+    </div>
+</form>
+
+<h2>AI Client</h2>
+<div style="background: #16213e; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
+    <div style="margin-bottom: 6px;"><span class="label">Chat API URL:</span> <code style="color: #0f9b58;">{{ chat_api_url }}</code></div>
+    <div><span class="label">Model Name:</span> <code style="color: #0f9b58;">{{ chat_model_name }}</code></div>
+    <p style="color: #555; font-size: 12px; margin-top: 8px;">Configure via AUDIOSHUTTLE_CHAT_API_URL and AUDIOSHUTTLE_CHAT_MODEL_NAME environment variables</p>
+</div>
+
+<h2>Preset AI Clients</h2>
+<table style="width: 100%; border-collapse: collapse;">
+    <tr style="border-bottom: 1px solid #30363d;">
+        <th style="text-align: left; padding: 8px; color: #888;">Client</th>
+        <th style="text-align: left; padding: 8px; color: #888;">Description</th>
+    </tr>
+    {% for client in ai_clients %}
+    <tr style="border-bottom: 1px solid #1a1a2e;">
+        <td style="padding: 8px;">{{ client.name }}</td>
+        <td style="padding: 8px; color: #888;">{{ client.description }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% endblock %}

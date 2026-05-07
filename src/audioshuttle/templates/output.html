@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if rescanned %}
+<p style="color: #0f9b58; font-weight: 600; margin-bottom: 12px;">✓ Rescanned</p>
+{% endif %}
+
+<h2>DAW Detection</h2>
+<div style="background: #16213e; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
+    <div style="margin-bottom: 6px;">
+        <span class="label">Reaper:</span>
+        <span class="badge {% if detection.reaper.running %}badge-ok{% else %}badge-off{% endif %}">
+            {% if detection.reaper.running %}Running{% else %}Not Running{% endif %}
+        </span>
+    </div>
+    <div style="margin-bottom: 8px;">
+        <span class="label">Ardour:</span>
+        <span class="badge {% if detection.ardour.running %}badge-ok{% else %}badge-off{% endif %}">
+            {% if detection.ardour.running %}Running{% else %}Not Running{% endif %}
+        </span>
+    </div>
+    <form method="POST" action="/output/rescan" style="display: inline;">
+        <button type="submit" style="background: #0f3460; color: #eee; border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;">Rescan</button>
+    </form>
+</div>
+
+<h2>DAW Preset</h2>
+<form method="POST" action="/output/daw-preset" style="margin-bottom: 20px;">
+    <select name="daw_type" style="background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; font-size: 14px;">
+        {% for preset in daw_presets %}
+        <option value="{{ preset.id }}" {% if preset.id == daw_type %}selected{% endif %}>{{ preset.name }} (port {{ preset.osc_port }})</option>
+        {% endfor %}
+    </select>
+    <button type="submit" style="background: #0f9b58; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; margin-left: 8px;">Apply</button>
+</form>
+
+<h2>Connection</h2>
+<div style="background: #16213e; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
+    <div><span class="label">Host:</span> <code style="color: #0f9b58;">{{ reaper_host }}</code></div>
+    <div><span class="label">Port:</span> <code style="color: #0f9b58;">{{ reaper_port }}</code></div>
+</div>
+
+<h2>OSC Address Mappings</h2>
+{% if osc_mappings %}
+<table style="width: 100%; border-collapse: collapse;">
+    <tr style="border-bottom: 1px solid #30363d;">
+        <th style="text-align: left; padding: 8px; color: #888;">Pattern</th>
+    </tr>
+    {% for m in osc_mappings %}
+    <tr style="border-bottom: 1px solid #1a1a2e;">
+        <td style="padding: 6px 8px; font-family: 'SF Mono', monospace; font-size: 12px;">{{ m.pattern }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p class="empty">No OSC mappings loaded — bridge not connected</p>
+{% endif %}
+{% endblock %}

@@ -73,6 +73,12 @@ Rules:
 - Do NOT output anything except the JSON object"""
 
 
+def update_system_prompt(new_prompt: str) -> None:
+    """Update the module-level SYSTEM_PROMPT used by IntentTranslator."""
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = new_prompt
+
+
 class IntentTranslator:
     """Translates natural language commands to structured DAW tool calls."""
 
