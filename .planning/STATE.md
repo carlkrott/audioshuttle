@@ -10,11 +10,11 @@
 
 ## Current Position
 
-Phase: Phase 1 Foundation — ready for execution
-Status: Environment validated, ready to scaffold server
-Last activity: 2026-05-07 — Reaper installed, OSC confirmed
+Phase: Phase 1 COMPLETE — Phase 2 next
+Status: MCP server with 8 tools working, all tested live against Reaper
+Last activity: 2026-05-07 — Phase 1 complete
 
-Progress: [▓░░░░░░░░░] 5%
+Progress: [▓▓░░░░░░░░] 15%
 
 ## Verified Working
 
@@ -22,7 +22,8 @@ Progress: [▓░░░░░░░░░] 5%
 |-----------|--------|-------|
 | Reaper 7.71 | ✅ Installed | pacman package, running |
 | OSC bidirectional | ✅ Confirmed | Transport play/stop + real-time feedback |
-| OSC track commands | ⚠️ Sent, not visible | Commands sent without error, changes not reflected in UI — debug later |
+| OSC track commands | ✅ WORKING | All 3 approaches work (direct, select+direct, select+generic) |
+| MCP server | ✅ 8 tools | All tested live against Reaper |
 | Python 3.14 venv | ✅ Created | .venv/ with python-osc |
 | Gemma E4B (chat) | ✅ Running | localhost:8090, CPU CCD0 |
 | Gemma E2B model file | ✅ Available | 3GB UD-Q4_K_XL, not yet loaded |
@@ -62,11 +63,12 @@ Progress: [▓░░░░░░░░░] 5%
 
 ## Known Issues
 
-- **OSC track commands not visually reflected in Reaper**: `/track/1/mute 1` sent without error but Reaper UI didn't change. Transport commands (`/play`, `/stop`) DO work. Possible causes: (1) Reaper needs the track to be selected first via `/track/1/select`, (2) OSC pattern needs explicit track addressing, (3) Reaper OSC config needs adjustment. Will debug with proper tooling.
+- **Reaper volume feedback is in dB, not normalized**: Reaper sends `/track/N/volume/db` not `/track/N/volume` (0-1). Bridge converts using linear dB→normalized mapping. Approximate but usable.
+- **Track names empty in feedback**: Reaper may not send track names unless explicitly requested with a probe. Refresh_state requests names but may need delay.
 
 ## Blockers/Concerns
 
-- OSC track control visibility needs debugging (non-blocking — transport works)
+- OSC track control visibility — RESOLVED, all commands work
 - ROCm GPU inference on RX 6950 XT needs testing for E2B
 - SSL12 audio interface not detected by WirePlumber (affects STT)
 - No fine-tuning in v1 — relies entirely on prompt engineering
@@ -74,5 +76,5 @@ Progress: [▓░░░░░░░░░] 5%
 ## Session Continuity
 
 Last session: 2026-05-07
-Stopped at: Environment validated, Reaper+OSC confirmed, test project created
-Resume: Run `/gsd-plan-phase 1` to scaffold the MCP server
+Stopped at: Phase 1 complete (3 plans, 5 commits, 8 MCP tools working)
+Resume: Run `/gsd-plan-phase 2` to plan Core MCP Tools (FX, markers, actions, etc.)

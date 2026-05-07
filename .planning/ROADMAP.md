@@ -4,13 +4,13 @@
 
 ---
 
-### Phase 1: Foundation (Day 1-3)
+### Phase 1: Foundation (Day 1-3) ✅
 **Goal:** Reaper running locally, OSC communication working, project skeleton
 
 **Plans:** 3 plans
-- [ ] 01-01-PLAN.md — Python package skeleton, config, data models
-- [ ] 01-02-PLAN.md — OSC bridge module + track command diagnostics
-- [ ] 01-03-PLAN.md — MCP server with DAW control tools
+- [x] 01-01-PLAN.md — Python package skeleton, config, data models
+- [x] 01-02-PLAN.md — OSC bridge module + track command diagnostics
+- [x] 01-03-PLAN.md — MCP server with 8 DAW control tools + CLI
 
 ---
 
