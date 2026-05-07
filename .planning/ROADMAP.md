@@ -48,12 +48,11 @@
 ### Phase 5: Voice + Demo (Day 9-12)
 **Goal:** Voice control working, Kaggle submission ready
 
-**Plans:** TBD
-- Whisper STT integration via SSL12
-- Voice command pipeline: mic → Whisper → MCP → Reaper
-- Demo video recording
-- README, Kaggle submission package
-- Polish and edge cases
+**Plans:** 4 plans in 4 waves
+- [ ] 05-01-PLAN.md — STT engine (faster-whisper) + transcribe_audio MCP tool
+- [ ] 05-02-PLAN.md — Browser voice recording UI + voice pipeline endpoint
+- [ ] 05-03-PLAN.md — README + demo walkthrough + CI workflow
+- [ ] 05-04-PLAN.md — Polish launcher/dashboard + human E2E verification
 
 ---
 
