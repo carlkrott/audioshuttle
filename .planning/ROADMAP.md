@@ -7,11 +7,10 @@
 ### Phase 1: Foundation (Day 1-3)
 **Goal:** Reaper running locally, OSC communication working, project skeleton
 
-**Plans:** TBD
-- Install Reaper on this machine, enable OSC control surface
-- Python project skeleton with fastmcp + python-osc
-- Verify OSC connectivity (localhost loopback)
-- Basic MCP server that can send/receive OSC to Reaper
+**Plans:** 3 plans
+- [ ] 01-01-PLAN.md — Python package skeleton, config, data models
+- [ ] 01-02-PLAN.md — OSC bridge module + track command diagnostics
+- [ ] 01-03-PLAN.md — MCP server with DAW control tools
 
 ---
 
