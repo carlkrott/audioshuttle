@@ -14,23 +14,22 @@
 
 ---
 
-### Phase 2: Core MCP Tools (Day 3-5)
+### Phase 2: Core MCP Tools (Day 3-5) ✅
 **Goal:** Extended MCP tools — transport seek, FX control, master control, Reaper actions, command validation
 
 **Plans:** 2 plans in 2 waves
-- [ ] 02-01-PLAN.md — Address validation + transport seek + track count + master control
-- [ ] 02-02-PLAN.md — FX control + Reaper actions + track arm + repeat/metronome toggles
+- [x] 02-01-PLAN.md — Address validation + transport seek + track count + master control
+- [x] 02-02-PLAN.md — FX control + Reaper actions + track arm + repeat/metronome toggles
 
 ---
 
 ### Phase 3: Embedded Model Integration (Day 5-7)
 **Goal:** E2B running on GPU, translating natural language to OSC commands
 
-**Plans:** TBD
-- Start llama-server with E2B on RX 6950 XT (ROCm)
-- System prompt engineering for audio domain
-- Intent → OSC command translation pipeline
-- Context provider: feed DAW state to model for informed translation
+**Plans:** 3 plans in 3 waves
+- [ ] 03-01-PLAN.md — Model server lifecycle (start/stop/health) + GPU config
+- [ ] 03-02-PLAN.md — Intent translator (prompt engineering + response parsing + fallback)
+- [ ] 03-03-PLAN.md — interpret_command MCP tool + server integration
 
 ---
 
