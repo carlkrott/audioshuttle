@@ -40,4 +40,13 @@ class Settings(BaseSettings):
     # Memory vault (Obsidian-compatible)
     memory_vault_path: str = "~/.audioshuttle/memory"
 
+    # DAW selection
+    daw_type: str = "reaper"  # "reaper" or "ardour"
+
+    # Web UI behavior
+    auto_open_browser: bool = True  # auto-open browser on startup
+    tray_enabled: bool = True  # show system tray icon
+    toast_notifications: bool = True  # show system tray toasts for errors
+    log_level: str = "warning"  # logging level for uvicorn
+
     model_config = {"env_prefix": "AUDIOSHUTTLE_"}
