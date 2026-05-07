@@ -18,6 +18,16 @@ class Settings(BaseSettings):
     # Embedded model (domain expert)
     model_api_url: str = "http://localhost:8092/v1/chat/completions"
     model_name: str = "gemma-4-e2b"
+    model_enabled: bool = True
+    model_binary: str = "/usr/bin/llama-server"
+    model_path: str = "/home/korphaus/models/llm/gemma-4-e2b-it/gemma-4-E2B-it-UD-Q4_K_XL.gguf"
+    model_gpu_device: int = 0  # ROCm device index (0 = RX 6950 XT)
+    model_context_size: int = 8192
+    model_threads: int = 4
+    model_threads_batch: int = 4
+    model_parallel: int = 2
+    model_timeout: int = 60  # seconds for API requests
+    model_gpu_layers: int = 99  # offload all layers to GPU
 
     # External chat interface (example AI)
     chat_api_url: str = "http://localhost:8090/v1/chat/completions"
