@@ -15,13 +15,11 @@
 ---
 
 ### Phase 2: Core MCP Tools (Day 3-5)
-**Goal:** Full set of DAW control MCP tools that any AI can call
+**Goal:** Extended MCP tools — transport seek, FX control, master control, Reaper actions, command validation
 
-**Plans:** TBD
-- MCP tools: volume, mute, solo, pan, transport, track listing
-- DAW state discovery (track names, counts, current values)
-- Structured JSON responses from tools
-- Command validation layer
+**Plans:** 2 plans in 2 waves
+- [ ] 02-01-PLAN.md — Address validation + transport seek + track count + master control
+- [ ] 02-02-PLAN.md — FX control + Reaper actions + track arm + repeat/metronome toggles
 
 ---
 
