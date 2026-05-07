@@ -1,0 +1,71 @@
+# Roadmap — AudioShuttle
+
+## Timeline: 12 days (deadline ~May 19)
+
+---
+
+### Phase 1: Foundation (Day 1-3)
+**Goal:** Reaper running on PCS, OSC communication working, project skeleton
+
+**Plans:** TBD
+- Install Reaper on PCS, enable OSC control surface
+- Python project skeleton with fastmcp + python-osc
+- Verify OSC connectivity over Tailscale (7995x → PCS)
+- Basic MCP server that can send/receive OSC to Reaper
+
+---
+
+### Phase 2: Core MCP Tools (Day 3-5)
+**Goal:** Full set of DAW control MCP tools that any AI can call
+
+**Plans:** TBD
+- MCP tools: volume, mute, solo, pan, transport, track listing
+- DAW state discovery (track names, counts, current values)
+- Structured JSON responses from tools
+- Command validation layer
+
+---
+
+### Phase 3: Embedded Model Integration (Day 5-7)
+**Goal:** E2B running on GPU, translating natural language to OSC commands
+
+**Plans:** TBD
+- Start llama-server with E2B on RX 6950 XT (ROCm)
+- System prompt engineering for audio domain
+- Intent → OSC command translation pipeline
+- Context provider: feed DAW state to model for informed translation
+
+---
+
+### Phase 4: Web UI + Integration (Day 7-9)
+**Goal:** Setup wizard, status dashboard, full end-to-end demo working
+
+**Plans:** TBD
+- FastAPI web UI: setup wizard, connection status, config
+- System tray icon
+- Obsidian memory vault setup
+- End-to-end test: text command → MCP → E2B → OSC → Reaper
+
+---
+
+### Phase 5: Voice + Demo (Day 9-12)
+**Goal:** Voice control working, Kaggle submission ready
+
+**Plans:** TBD
+- Whisper STT integration via SSL12
+- Voice command pipeline: mic → Whisper → MCP → Reaper
+- Demo video recording
+- README, Kaggle submission package
+- Polish and edge cases
+
+---
+
+## Risk Register
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| ROCm fails on 6950 XT | Can't run E2B on GPU | Fall back to Vulkan backend or CPU |
+| Reaper OSC over Tailscale has latency | Commands feel sluggish | Test early, use TCP mode if needed |
+| E2B prompt engineering insufficient | Commands mistranslated | Add validation layer, fallback to direct tool calls |
+| PCS unavailable | No DAW to control | Test with Reaper on this machine as backup |
+| 12 days too tight | Incomplete demo | Ruthless scope: P0 only, everything else is stretch |

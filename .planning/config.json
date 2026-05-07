@@ -1,0 +1,10 @@
+{
+  "yolo": true,
+  "depth": "comprehensive",
+  "parallel": true,
+  "quality_profile": "zai/glm-5.1",
+  "commit_docs": true,
+  "research": true,
+  "plan_check": true,
+  "verifier": true
+}
