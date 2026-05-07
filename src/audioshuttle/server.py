@@ -8,6 +8,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from audioshuttle.config import Settings
+from audioshuttle.context_manager import ContextManager
 from audioshuttle.model_server import ModelServer
 from audioshuttle.models import CommandResult
 from audioshuttle.osc_bridge import ReaperOSC
@@ -64,6 +65,11 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             model_server = None
 
     translator = IntentTranslator(model_server)
+
+    context_manager = ContextManager(
+        model_server=model_server,
+        vault_path=settings.memory_vault_path,
+    )
 
     # ── State discovery tools ──────────────────────────────────
 
@@ -393,10 +399,14 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         # Get current DAW state for context
         state = bridge.state
 
+        # Record user command to context
+        context_manager.add("user", command)
+
         # Translate
         result = translator.translate(command, state)
 
         if not result.success:
+            context_manager.add("assistant", f"✗ Error: {result.error} [{result.method}]")
             return {
                 "success": False,
                 "error": result.error,
@@ -480,6 +490,10 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             }
 
         cmd_result = executor()
+        context_manager.add(
+            "assistant",
+            f"→ {tool_name}({tool_args}) [{result.method}]",
+        )
         return {
             "success": cmd_result.success,
             "tool": tool_name,
