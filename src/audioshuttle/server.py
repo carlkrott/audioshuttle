@@ -8,8 +8,10 @@ from typing import Any
 from fastmcp import FastMCP
 
 from audioshuttle.config import Settings
+from audioshuttle.model_server import ModelServer
 from audioshuttle.models import CommandResult
 from audioshuttle.osc_bridge import ReaperOSC
+from audioshuttle.translator import IntentTranslator
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +34,9 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             "DAW control server for Reaper. Control tracks (volume, mute, solo, pan, "
             "record arm), transport (play, stop, record, pause, seek), master volume/pan, "
             "FX parameters and bypass, trigger Reaper actions, toggle repeat and metronome. "
-            "Track numbers start at 1. Volume is 0.0-1.0. Pan is -1.0 (left) to 1.0 (right). "
-            "FX and parameter indices are 0-based."
+            "Use interpret_command for natural language commands like 'mute the drums' or "
+            "'turn up the vocals'. Track numbers start at 1. Volume is 0.0-1.0. "
+            "Pan is -1.0 (left) to 1.0 (right). FX and parameter indices are 0-based."
         ),
     )
 
@@ -42,6 +45,25 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         send_port=settings.reaper_port,
         feedback_port=settings.reaper_feedback_port,
     )
+
+    # Start embedded model server (E2B on GPU) if enabled
+    model_server: ModelServer | None = None
+    if settings.model_enabled:
+        model_server = ModelServer(settings)
+        try:
+            started = model_server.start(wait=True, timeout=60.0)
+            if started:
+                logger.info("E2B model server ready for intent translation")
+            else:
+                logger.warning(
+                    "E2B model server failed to start — fallback parser only"
+                )
+                model_server = None
+        except Exception as e:
+            logger.warning("E2B model server error: %s — fallback parser only", e)
+            model_server = None
+
+    translator = IntentTranslator(model_server)
 
     # ── State discovery tools ──────────────────────────────────
 
@@ -354,6 +376,117 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             "success": result.success,
             "toggled": "metronome",
             "error": result.error,
+        }
+
+    # ── Natural language command interpreter ──────────────────
+
+    @mcp.tool()
+    def interpret_command(command: str) -> dict[str, Any]:
+        """Interpret a natural language command and execute it.
+
+        Translates natural language like 'mute the drums' or 'turn up the vocals'
+        into the appropriate DAW tool call and executes it.
+
+        Args:
+            command: Natural language command (e.g., 'mute the drums', 'seek to 30 seconds')
+        """
+        # Get current DAW state for context
+        state = bridge.state
+
+        # Translate
+        result = translator.translate(command, state)
+
+        if not result.success:
+            return {
+                "success": False,
+                "error": result.error,
+                "method": result.method,
+                "suggestion": "Try commands like: 'mute the drums', 'play', 'turn up vocals'",
+            }
+
+        # Execute the translated tool call
+        tool_name = result.tool
+        tool_args = result.args
+
+        # Map tool names to bridge methods
+        tool_map = {
+            "transport_control": lambda: bridge.transport_play()
+            if tool_args.get("action") == "play"
+            else bridge.transport_stop()
+            if tool_args.get("action") == "stop"
+            else bridge.transport_record()
+            if tool_args.get("action") == "record"
+            else bridge.transport_pause()
+            if tool_args.get("action") == "pause"
+            else None,
+            "transport_seek": lambda: bridge.transport_seek(
+                float(tool_args.get("position_seconds", 0))
+            ),
+            "set_track_volume": lambda: bridge.set_track_volume(
+                int(tool_args["track"]), float(tool_args["volume"])
+            ),
+            "set_track_mute": lambda: bridge.set_track_mute(
+                int(tool_args["track"]), bool(tool_args["mute"])
+            ),
+            "set_track_solo": lambda: bridge.set_track_solo(
+                int(tool_args["track"]), bool(tool_args["solo"])
+            ),
+            "set_track_pan": lambda: bridge.set_track_pan(
+                int(tool_args["track"]), float(tool_args["pan"])
+            ),
+            "set_master_volume": lambda: bridge.set_master_volume(
+                float(tool_args["volume"])
+            ),
+            "set_master_pan": lambda: bridge.set_master_pan(
+                float(tool_args["pan"])
+            ),
+            "set_fx_param": lambda: bridge.set_fx_param(
+                int(tool_args["track"]),
+                int(tool_args["fx"]),
+                int(tool_args["param"]),
+                float(tool_args["value"]),
+            ),
+            "fx_bypass": lambda: bridge.fx_bypass(
+                int(tool_args["track"]),
+                int(tool_args["fx"]),
+                bool(tool_args["bypass"]),
+            ),
+            "trigger_action": lambda: bridge.trigger_action(
+                int(tool_args["command_id"])
+            ),
+            "set_track_arm": lambda: bridge.set_track_recarm(
+                int(tool_args["track"]), bool(tool_args["arm"])
+            ),
+            "toggle_repeat": lambda: bridge.toggle_repeat(),
+            "toggle_metronome": lambda: bridge.toggle_metronome(),
+        }
+
+        # Discovery tools (no bridge method to call, just return state)
+        if tool_name in ("list_tracks", "get_transport", "get_daw_state", "get_track_count"):
+            return {
+                "success": True,
+                "tool": tool_name,
+                "args": tool_args,
+                "method": result.method,
+                "note": "Discovery tool — use the dedicated tool directly for state queries",
+            }
+
+        executor = tool_map.get(tool_name)
+        if executor is None:
+            return {
+                "success": False,
+                "error": f"No executor for tool: {tool_name}",
+                "method": result.method,
+            }
+
+        cmd_result = executor()
+        return {
+            "success": cmd_result.success,
+            "tool": tool_name,
+            "args": tool_args,
+            "method": result.method,
+            "osc_address": cmd_result.address,
+            "error": cmd_result.error,
         }
 
     return mcp
