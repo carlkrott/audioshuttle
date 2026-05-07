@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import deque
 from typing import Any
@@ -45,6 +46,7 @@ class ReaperOSC:
         - Connection health monitoring via periodic ping
         - Automatic reconnection attempt when Reaper disconnects
         - Warning logs when connection drops for extended period
+        - OSC address validation to prevent injection
     """
 
     # How often to ping Reaper (seconds)
@@ -53,6 +55,39 @@ class ReaperOSC:
     CONNECTION_TIMEOUT: float = 5.0
     # How long disconnected before logging a warning (seconds)
     WARNING_AFTER: float = 10.0
+
+    # Whitelist of known Reaper OSC address patterns (regex)
+    _ADDRESS_PATTERNS: list[re.Pattern[str]] = [
+        re.compile(p)
+        for p in [
+            r"^/play$",
+            r"^/stop$",
+            r"^/record$",
+            r"^/pause$",
+            r"^/rewind$",
+            r"^/forward$",
+            r"^/time$",
+            r"^/track/\d+/volume$",
+            r"^/track/\d+/mute$",
+            r"^/track/\d+/solo$",
+            r"^/track/\d+/pan$",
+            r"^/track/\d+/name$",
+            r"^/track/\d+/select$",
+            r"^/track/\d+/recarm$",
+            r"^/track/\d+/fx/\d+/fxparam/\d+/value$",
+            r"^/track/\d+/fx/\d+/bypass$",
+            r"^/track/\d+/send/\d+/volume$",
+            r"^/track/count$",
+            r"^/master/volume$",
+            r"^/master/pan$",
+            r"^/action$",
+            r"^/repeat$",
+            r"^/click$",
+            r"^/marker/\d+/name$",
+            r"^/marker/\d+/time$",
+            r"^/marker/count$",
+        ]
+    ]
 
     def __init__(
         self,
@@ -82,6 +117,8 @@ class ReaperOSC:
         self._message_log: deque[tuple[str, Any]] = deque(maxlen=500)
         # Track volume dB values (track_num -> dB float) for conversion
         self._track_volume_db: dict[int, float] = {}
+        # Track count from Reaper feedback
+        self._track_count: int = 0
 
         # Connection monitoring
         self._disconnected_since: float | None = None
@@ -137,10 +174,44 @@ class ReaperOSC:
             return None
         return self._disconnected_since
 
+    # ── Address validation ───────────────────────────────────────
+
+    @classmethod
+    def _validate_address(cls, address: str) -> bool:
+        """Validate an OSC address against the known Reaper whitelist.
+
+        Rules:
+            - Must start with ``/``
+            - No path traversal (``..``), null bytes, or control characters
+            - Track/FX numbers in addresses must be positive integers
+            - Must match a known Reaper OSC pattern
+        """
+        # Structural checks
+        if not address.startswith("/"):
+            return False
+        if ".." in address:
+            return False
+        if "\x00" in address:
+            return False
+        if any(ord(c) < 0x20 for c in address):
+            return False
+
+        # Whitelist match
+        return any(p.match(address) for p in cls._ADDRESS_PATTERNS)
+
     # ── Low-level send ──────────────────────────────────────────
 
     def send_command(self, address: str, *args: Any) -> CommandResult:
-        """Send a raw OSC command to Reaper."""
+        """Send a validated OSC command to Reaper."""
+        # Validate address before sending
+        if not self._validate_address(address):
+            logger.warning("Rejected invalid OSC address: %s", address)
+            return CommandResult(
+                success=False,
+                address=address,
+                error=f"Invalid OSC address: {address}",
+            )
+
         try:
             self._client.send_message(address, list(args))
             logger.debug("Sent: %s %s", address, args)
@@ -234,6 +305,125 @@ class ReaperOSC:
         value = max(0.0, min(1.0, value))
         return self.send_command("/master/volume", value)
 
+    def set_master_pan(self, pan: float) -> CommandResult:
+        """Set master pan (-1.0 left to 1.0 right, clamped)."""
+        pan = max(-1.0, min(1.0, pan))
+        return self.send_command("/master/pan", pan)
+
+    def transport_seek(self, seconds: float) -> CommandResult:
+        """Seek to a specific position in the timeline.
+
+        Args:
+            seconds: Position in seconds from the start (must be >= 0).
+        """
+        if seconds < 0:
+            return CommandResult(
+                success=False,
+                address="/time",
+                error=f"Seek position must be >= 0, got {seconds}",
+            )
+        result = self.send_command("/time", seconds)
+        if result.success:
+            self._state.transport.position_seconds = seconds
+        return result
+
+    def get_track_count_real(self) -> int:
+        """Request track count from Reaper and return it.
+
+        Sends ``/track/count`` and waits briefly for feedback.
+        Falls back to the current cached value if no response.
+        """
+        self.send_command("/track/count")
+        time.sleep(0.2)
+        return self._track_count or self.get_track_count()
+
+    # ── FX control ──────────────────────────────────────────────
+
+    def set_fx_param(
+        self, track: int, fx: int, param: int, value: float,
+    ) -> CommandResult:
+        """Set an FX plugin parameter value.
+
+        Args:
+            track: Track number (>= 1).
+            fx: FX index on the track (0-based).
+            param: Parameter index within the FX (0-based).
+            value: Parameter value 0.0-1.0 (clamped).
+        """
+        if track < 1 or fx < 0 or param < 0:
+            return CommandResult(
+                success=False,
+                address=f"/track/{track}/fx/{fx}/fxparam/{param}/value",
+                error=f"Invalid indices: track={track} (>=1), fx={fx} (>=0), param={param} (>=0)",
+            )
+        value = max(0.0, min(1.0, value))
+        return self.send_command(
+            f"/track/{track}/fx/{fx}/fxparam/{param}/value", value,
+        )
+
+    def fx_bypass(self, track: int, fx: int, bypass: bool) -> CommandResult:
+        """Bypass or enable an FX plugin on a track.
+
+        Note: Reaper OSC convention: 1 = bypassed, 0 = active.
+
+        Args:
+            track: Track number (>= 1).
+            fx: FX index on the track (0-based).
+            bypass: True to bypass, False to enable.
+        """
+        if track < 1 or fx < 0:
+            return CommandResult(
+                success=False,
+                address=f"/track/{track}/fx/{fx}/bypass",
+                error=f"Invalid indices: track={track} (>=1), fx={fx} (>=0)",
+            )
+        return self.send_command(
+            f"/track/{track}/fx/{fx}/bypass", 1 if bypass else 0,
+        )
+
+    # ── Action triggering ───────────────────────────────────────
+
+    def trigger_action(self, command_id: int) -> CommandResult:
+        """Trigger a Reaper action by its command ID.
+
+        Args:
+            command_id: Reaper action command ID (positive integer).
+        """
+        if command_id <= 0:
+            return CommandResult(
+                success=False,
+                address="/action",
+                error=f"Action command_id must be > 0, got {command_id}",
+            )
+        return self.send_command("/action", command_id)
+
+    # ── Track arm ───────────────────────────────────────────────
+
+    def set_track_recarm(self, track: int, arm: bool) -> CommandResult:
+        """Arm or disarm a track for recording.
+
+        Args:
+            track: Track number (>= 1).
+            arm: True to arm, False to disarm.
+        """
+        if track < 1:
+            return CommandResult(
+                success=False,
+                address=f"/track/{track}/recarm",
+                error=f"Track must be >= 1, got {track}",
+            )
+        return self.send_command(f"/track/{track}/recarm", 1 if arm else 0)
+
+    # ── Toggles ─────────────────────────────────────────────────
+
+    def toggle_repeat(self) -> CommandResult:
+        """Toggle repeat on/off in Reaper."""
+        return self.send_command("/repeat")
+
+    def toggle_metronome(self) -> CommandResult:
+        """Toggle the metronome/click on/off."""
+        return self.send_command("/click")
+
     # ── State discovery ─────────────────────────────────────────
 
     def refresh_state(self, wait: float = 0.5) -> DAWState:
@@ -250,6 +440,8 @@ class ReaperOSC:
             self.send_command(f"/track/{i}/solo")
             self.send_command(f"/track/{i}/pan")
         self.send_command("/master/volume")
+        self.send_command("/master/pan")
+        self.send_command("/track/count")
         time.sleep(wait)
         return self._state
 
@@ -303,6 +495,17 @@ class ReaperOSC:
                 self._state.transport.playing = False
         elif address == "/time":
             self._state.transport.position_seconds = float(val)
+
+        # Track count
+        elif address == "/track/count":
+            self._track_count = int(val)
+            self._state.track_count = int(val)
+
+        # Master state
+        elif address == "/master/volume":
+            self._state.master_volume = float(val)
+        elif address == "/master/pan":
+            self._state.master_pan = float(val)
 
         # Track state (addressed: /track/N/...)
         parts = address.strip("/").split("/")

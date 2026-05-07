@@ -63,5 +63,19 @@ class DAWState(BaseModel):
     transport: TransportState = Field(default_factory=TransportState)
     project_name: str = ""
     timestamp: float = Field(default_factory=time.time)
+    track_count: int = 0
+    master_volume: float = Field(default=0.75, ge=0.0, le=1.0)
+    master_pan: float = Field(default=0.0, ge=-1.0, le=1.0)
 
+    model_config = {"populate_by_name": True}
+
+
+class FXState(BaseModel):
+    """State of an FX plugin on a track."""
+
+    track_number: int = Field(ge=1)
+    fx_index: int = Field(ge=0)
+    name: str = ""
+    bypassed: bool = False
+    params: dict[int, float] = Field(default_factory=dict)
     model_config = {"populate_by_name": True}
