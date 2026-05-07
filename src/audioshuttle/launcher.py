@@ -56,6 +56,32 @@ def launch(
 
     logger.info("AudioShuttle starting...")
 
+    # ── Clean up any orphaned processes from prior runs ──────
+    import os as _os
+    import subprocess as _sp
+    import time as _time
+
+    for port in [web_port, settings.reaper_port + 92]:  # 8765, 8092
+        try:
+            result = _sp.run(
+                ["fuser", f"{port}/tcp"], capture_output=True, text=True, timeout=5,
+            )
+            if result.stdout.strip():
+                for pid_str in result.stdout.strip().split():
+                    try:
+                        pid = int(pid_str.strip())
+                        if pid != _os.getpid():
+                            logger.info(
+                                "Killing orphaned process on port %d (pid %d)",
+                                port, pid,
+                            )
+                            _os.kill(pid, 9)
+                    except (ValueError, ProcessLookupError):
+                        pass
+        except Exception:
+            pass
+    _time.sleep(1)
+
     # ── Create shared components ───────────────────────────────
     bridge = ReaperOSC(
         host=settings.reaper_host,
