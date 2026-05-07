@@ -118,11 +118,23 @@ All artifacts: EXISTS ✓, SUBSTANTIVE ✓ (min 3 lines for __init__.py, all oth
 - All responses valid JSON-RPC 2.0 with correct IDs
 - **VERDICT: PASS**
 
-### 3. SSE Transport Test
+### 3. SSE Transport Test ✅ VERIFIED 2026-05-07
 
-**Test:** Start server with `--transport sse --port 8765`, connect from browser/curl
-**Expected:** SSE endpoint responds, tools callable via HTTP
-**Why human:** Requires starting a persistent server process and connecting to it
+**Test:** Start MCP server with `--transport sse --port 8765`, send JSON-RPC via HTTP POST, receive responses on SSE stream
+**Result:** Full SSE transport works end-to-end
+**Details:**
+- SSE endpoint returns session-specific message URL (`/messages/?session_id=...`)
+- 8 POST requests sent, 8 responses received via SSE stream (100% match)
+- `initialize` → capabilities + server info ✅
+- `tools/list` → 8 tools with schemas ✅
+- `tools/call transport_control(play)` → `{"success":true,"action":"play"}` ✅
+- `tools/call get_transport` → `{"playing":false,"position_seconds":245.6}` ✅
+- `tools/call set_track_volume(1, 0.0)` → `{"success":true,"track":1,"volume":0.0}` ✅
+- `tools/call set_track_volume(1, 1.0)` → `{"success":true,"track":1,"volume":1.0}` ✅
+- `tools/call transport_control(stop)` → `{"success":true,"action":"stop"}` ✅
+- All HTTP POSTs returned 202 Accepted; all responses valid JSON-RPC 2.0
+- Server logs show clean startup/shutdown with no errors
+- **VERDICT: PASS**
 
 ### Gaps Summary
 
