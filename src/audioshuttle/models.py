@@ -79,3 +79,15 @@ class FXState(BaseModel):
     bypassed: bool = False
     params: dict[int, float] = Field(default_factory=dict)
     model_config = {"populate_by_name": True}
+
+
+class TranslationResult(BaseModel):
+    """Result of translating a natural language command to a tool call."""
+
+    success: bool
+    tool: str = ""
+    args: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+    raw_response: Optional[str] = None
+    method: str = ""  # "model" or "fallback"
+    model_config = {"populate_by_name": True}
