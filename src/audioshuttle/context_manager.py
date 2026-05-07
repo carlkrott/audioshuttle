@@ -58,11 +58,12 @@ class ContextManager:
 
     def _compact(self) -> None:
         """Compact old messages into a summary, dump old to vault."""
-        if len(self._messages) <= 10:
+        keep_count = max(5, self._max_messages // 2)
+        if len(self._messages) <= keep_count:
             return
 
-        old = self._messages[:-10]
-        recent = self._messages[-10:]
+        old = self._messages[:-keep_count]
+        recent = self._messages[-keep_count:]
 
         # Dump old messages before discarding
         self._dump_session(old)
