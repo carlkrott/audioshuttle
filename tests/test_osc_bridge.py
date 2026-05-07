@@ -1,6 +1,7 @@
 """Tests for OSC bridge module."""
 
 import pytest
+import time
 from pydantic import ValidationError
 
 from audioshuttle.models import (
@@ -10,6 +11,7 @@ from audioshuttle.models import (
     TrackState,
     TransportState,
 )
+from audioshuttle.osc_bridge import ReaperOSC
 
 
 class TestModels:
@@ -111,3 +113,57 @@ class TestAddressFormatting:
     def test_fx_param_address(self):
         track, fx, param = 1, 2, 3
         assert f"/track/{track}/fx/{fx}/fxparam/{param}/value" == "/track/1/fx/2/fxparam/3/value"
+
+
+class TestConnectionHealth:
+    """Test connection health monitoring (offline — no Reaper needed)."""
+
+    def test_reconnect_count_starts_at_zero(self):
+        """Bridge starts with zero reconnection attempts."""
+        bridge = ReaperOSC(
+            "127.0.0.1", 19998, 19999,
+            ping_interval=0.5, connection_timeout=1.0,
+        )
+        try:
+            assert bridge.reconnect_count == 0
+        finally:
+            bridge.close()
+
+    def test_disconnected_since_initially_set(self):
+        """Bridge has grace period on startup, then detects disconnection."""
+        bridge = ReaperOSC(
+            "127.0.0.1", 19998, 19999,
+            ping_interval=0.5, connection_timeout=1.0,
+        )
+        try:
+            # Grace period: is_connected is True on startup
+            assert bridge.is_connected is True
+            # Wait for health loop to detect no Reaper
+            # Needs: 1 ping interval (0.5s) + connection timeout (1.0s) + margin
+            time.sleep(2.5)
+            assert bridge.is_connected is False
+            assert bridge._disconnected_since is not None
+        finally:
+            bridge.close()
+
+    def test_health_thread_is_daemon(self):
+        """Health monitoring thread is daemon (won't block exit)."""
+        bridge = ReaperOSC(
+            "127.0.0.1", 19998, 19999,
+            ping_interval=0.5, connection_timeout=1.0,
+        )
+        try:
+            assert bridge._health_thread.daemon is True
+            assert bridge._health_thread.is_alive()
+        finally:
+            bridge.close()
+
+    def test_close_stops_health_thread(self):
+        """Closing the bridge stops the health monitor."""
+        bridge = ReaperOSC(
+            "127.0.0.1", 19998, 19999,
+            ping_interval=0.5, connection_timeout=1.0,
+        )
+        bridge.close()
+        time.sleep(0.5)
+        assert not bridge._health_thread.is_alive()

@@ -22,43 +22,87 @@ from audioshuttle.models import (
 logger = logging.getLogger(__name__)
 
 
+class _ReusableOSCServer(osc_server.ThreadingOSCUDPServer):
+    """OSC UDP server with SO_REUSEADDR to prevent port conflicts."""
+
+    allow_reuse_address = True
+
+
+def _make_osc_server(
+    host: str, port: int, dispatcher: osc_dispatcher.Dispatcher,
+) -> osc_server.ThreadingOSCUDPServer:
+    """Create an OSC server with address reuse enabled."""
+    return _ReusableOSCServer((host, port), dispatcher)
+
+
 class ReaperOSC:
     """Bidirectional OSC bridge to Reaper DAW.
 
     Sends commands on send_port (default 8000) and listens
     for feedback on feedback_port (default 9000).
+
+    Features:
+        - Connection health monitoring via periodic ping
+        - Automatic reconnection attempt when Reaper disconnects
+        - Warning logs when connection drops for extended period
     """
+
+    # How often to ping Reaper (seconds)
+    PING_INTERVAL: float = 3.0
+    # How long without feedback before considered disconnected (seconds)
+    CONNECTION_TIMEOUT: float = 5.0
+    # How long disconnected before logging a warning (seconds)
+    WARNING_AFTER: float = 10.0
 
     def __init__(
         self,
         host: str = "127.0.0.1",
         send_port: int = 8000,
         feedback_port: int = 9000,
+        *,
+        ping_interval: float | None = None,
+        connection_timeout: float | None = None,
+        warning_after: float | None = None,
     ) -> None:
         self._host = host
         self._send_port = send_port
         self._feedback_port = feedback_port
+
+        # Timing config (overridable for testing)
+        self._ping_interval = ping_interval or self.PING_INTERVAL
+        self._connection_timeout = connection_timeout or self.CONNECTION_TIMEOUT
+        self._warning_after = warning_after or self.WARNING_AFTER
 
         # UDP client for sending commands
         self._client = udp_client.SimpleUDPClient(host, send_port)
 
         # Internal state
         self._state = DAWState()
-        self._last_feedback_time: float = 0.0
+        self._last_feedback_time: float = time.time()  # Grace period on startup
         self._message_log: deque[tuple[str, Any]] = deque(maxlen=500)
         # Track volume dB values (track_num -> dB float) for conversion
         self._track_volume_db: dict[int, float] = {}
 
+        # Connection monitoring
+        self._disconnected_since: float | None = None
+        self._reconnect_count: int = 0
+
         # Feedback listener
         self._dispatcher = osc_dispatcher.Dispatcher()
         self._dispatcher.set_default_handler(self._on_osc_message)
-        self._server = osc_server.ThreadingOSCUDPServer(
-            ("127.0.0.1", feedback_port), self._dispatcher
-        )
+        self._server = _make_osc_server("127.0.0.1", feedback_port, self._dispatcher)
         self._server_thread = threading.Thread(
             target=self._server.serve_forever, daemon=True
         )
         self._server_thread.start()
+
+        # Health monitoring thread — pings Reaper and checks connection
+        self._stop_health = threading.Event()
+        self._health_thread = threading.Thread(
+            target=self._health_loop, daemon=True
+        )
+        self._health_thread.start()
+
         logger.info(
             "ReaperOSC initialized: send=%s:%d, feedback=127.0.0.1:%d",
             host, send_port, feedback_port,
@@ -73,13 +117,25 @@ class ReaperOSC:
 
     @property
     def is_connected(self) -> bool:
-        """True if Reaper has sent feedback in the last 5 seconds."""
-        return (time.time() - self._last_feedback_time) < 5.0
+        """True if Reaper has sent feedback recently (within connection timeout)."""
+        return (time.time() - self._last_feedback_time) < self._connection_timeout
 
     @property
     def message_log(self) -> deque[tuple[str, Any]]:
         """Recent OSC messages received from Reaper."""
         return self._message_log
+
+    @property
+    def reconnect_count(self) -> int:
+        """Number of times the bridge has reconnected to Reaper."""
+        return self._reconnect_count
+
+    @property
+    def disconnected_since(self) -> float | None:
+        """Timestamp when disconnection was detected, or None if connected."""
+        if self.is_connected:
+            return None
+        return self._disconnected_since
 
     # ── Low-level send ──────────────────────────────────────────
 
@@ -210,7 +266,20 @@ class ReaperOSC:
 
     def _on_osc_message(self, address: str, *args: Any) -> None:
         """Handle incoming OSC messages from Reaper."""
-        self._last_feedback_time = time.time()
+        now = time.time()
+
+        # Detect reconnection (feedback received after being disconnected)
+        if (
+            self._disconnected_since is not None
+            and (now - self._last_feedback_time) > self._connection_timeout
+        ):
+            logger.info(
+                "Reaper feedback received — reconnected after %.1fs offline",
+                now - self._disconnected_since,
+            )
+            self._disconnected_since = None
+
+        self._last_feedback_time = now
         self._message_log.append((address, args))
         logger.debug("Recv: %s %s", address, args)
 
@@ -294,10 +363,81 @@ class ReaperOSC:
         self._state.tracks.sort(key=lambda t: t.track_number)
         return track
 
-    # ── Lifecycle ───────────────────────────────────────────────
+    # ── Connection health ───────────────────────────────────────
+
+    def _ping(self) -> CommandResult:
+        """Send a lightweight probe to trigger Reaper feedback.
+
+        Sends ``/track/1/name`` which Reaper always responds to for
+        existing tracks, and has no side-effects on playback state.
+        Falls back gracefully if track 1 doesn't exist.
+        """
+        return self.send_command("/track/1/name")
+
+    def _health_loop(self) -> None:
+        """Background thread: periodic ping + disconnection detection."""
+        while not self._stop_health.is_set():
+            self._ping()
+
+            # Check connection health after ping has had time to arrive
+            self._stop_health.wait(self._ping_interval)
+            if self._stop_health.is_set():
+                break
+
+            now = time.time()
+            time_since_feedback = now - self._last_feedback_time
+
+            if time_since_feedback > self._connection_timeout:
+                # Disconnected
+                if self._disconnected_since is None:
+                    self._disconnected_since = now
+                    logger.warning(
+                        "Reaper disconnected — no feedback for %.1fs",
+                        time_since_feedback,
+                    )
+                elif (now - self._disconnected_since) > self._warning_after:
+                    # Extended disconnection — log periodic warning and attempt reconnect
+                    logger.warning(
+                        "Reaper still disconnected after %.0fs (attempt #%d to reconnect)",
+                        now - self._disconnected_since,
+                        self._reconnect_count + 1,
+                    )
+                    self._attempt_reconnect()
+            else:
+                # Connected
+                if self._disconnected_since is not None:
+                    was_down = now - self._disconnected_since
+                    logger.info(
+                        "Reaper reconnected after %.1fs offline",
+                        was_down,
+                    )
+                    self._disconnected_since = None
+
+    def _attempt_reconnect(self) -> None:
+        """Attempt to re-establish communication with Reaper.
+
+        Re-creates the UDP client in case the port binding changed,
+        sends a burst of probes, and waits briefly for a response.
+        """
+        self._reconnect_count += 1
+        logger.info("Reconnect attempt #%d — recreating UDP client", self._reconnect_count)
+
+        try:
+            self._client = udp_client.SimpleUDPClient(
+                self._host, self._send_port
+            )
+        except Exception as e:
+            logger.error("Failed to recreate UDP client: %s", e)
+            return
+
+        # Send a burst of probes to trigger Reaper feedback
+        for probe in ["/marker/count", "/play", "/track/1/name"]:
+            self.send_command(probe)
+            time.sleep(0.1)
 
     def close(self) -> None:
-        """Stop the feedback listener and clean up."""
+        """Stop the feedback listener, health monitor, and clean up."""
+        self._stop_health.set()
         self._server.shutdown()
         logger.info("ReaperOSC closed")
 
