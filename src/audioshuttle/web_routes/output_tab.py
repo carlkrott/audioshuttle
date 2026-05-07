@@ -33,8 +33,8 @@ def _get_osc_mappings(bridge) -> list[dict]:
     try:
         if hasattr(bridge, "_ADDRESS_PATTERNS"):
             return [
-                {"pattern": p, "description": f"OSC address pattern"}
-                for p in sorted(bridge._ADDRESS_PATTERNS.keys())
+                {"pattern": p.pattern, "description": f"OSC address pattern"}
+                for p in bridge._ADDRESS_PATTERNS
             ]
     except Exception:
         pass

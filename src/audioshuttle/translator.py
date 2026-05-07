@@ -91,7 +91,16 @@ class IntentTranslator:
         Tries model-based translation first, falls back to rule-based.
         """
         # Try model-based translation
-        if self._model_server and self._model_server.is_running:
+        # Check is_running OR health_check — the model server may be running
+        # in a different process (e.g., started by the launcher)
+        model_available = False
+        if self._model_server:
+            if self._model_server.is_running:
+                model_available = True
+            elif hasattr(self._model_server, 'health_check') and self._model_server.health_check():
+                model_available = True
+
+        if model_available:
             result = self._translate_with_model(user_input, daw_state)
             if result.success:
                 return result

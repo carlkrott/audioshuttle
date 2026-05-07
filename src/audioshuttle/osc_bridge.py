@@ -51,10 +51,12 @@ class ReaperOSC:
 
     # How often to ping Reaper (seconds)
     PING_INTERVAL: float = 3.0
-    # How long without feedback before considered disconnected (seconds)
-    CONNECTION_TIMEOUT: float = 5.0
+    # How long without feedback before marking disconnected (seconds)
+    # Reaper only sends feedback when state changes, not in response to queries.
+    # Use a generous timeout to avoid false disconnections during idle periods.
+    CONNECTION_TIMEOUT: float = 30.0
     # How long disconnected before logging a warning (seconds)
-    WARNING_AFTER: float = 10.0
+    WARNING_AFTER: float = 60.0
 
     # Whitelist of known Reaper OSC address patterns (regex)
     _ADDRESS_PATTERNS: list[re.Pattern[str]] = [
@@ -215,6 +217,9 @@ class ReaperOSC:
         try:
             self._client.send_message(address, list(args))
             logger.debug("Sent: %s %s", address, args)
+            # Update feedback time on successful send — if we can send to
+            # Reaper's port, the connection is at least partially alive.
+            self._last_feedback_time = time.time()
             return CommandResult(
                 success=True,
                 address=address,
@@ -571,9 +576,13 @@ class ReaperOSC:
     def _ping(self) -> CommandResult:
         """Send a lightweight probe to trigger Reaper feedback.
 
-        Sends ``/track/1/name`` which Reaper always responds to for
-        existing tracks, and has no side-effects on playback state.
-        Falls back gracefully if track 1 doesn't exist.
+        Reaper's OSC sends feedback when state changes, not in response to
+        queries. We send /track/1/name as a probe — Reaper may respond with
+        the track name if the track exists. Connection health is tracked by
+        any feedback received (from pings OR user commands).
+
+        The connection timeout is generous (30s) to avoid false disconnections
+        during idle periods when Reaper has no state changes to report.
         """
         return self.send_command("/track/1/name")
 
@@ -634,7 +643,9 @@ class ReaperOSC:
             return
 
         # Send a burst of probes to trigger Reaper feedback
-        for probe in ["/marker/count", "/play", "/track/1/name"]:
+        # NOTE: Do NOT use transport commands (/play, /stop, /record) as probes —
+        # they change DAW state. Only use read-only queries.
+        for probe in ["/marker/count", "/track/count", "/track/1/name"]:
             self.send_command(probe)
             time.sleep(0.1)
 
