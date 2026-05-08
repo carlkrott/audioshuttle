@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Form, Request, UploadFile, File
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,12 @@ AI_CLIENTS = [
 
 # File path for persisted system prompt
 _PROMPT_FILE = Path("~/.audioshuttle/system-prompt.txt").expanduser()
+
+# Max voice upload size (10 MB)
+_MAX_VOICE_SIZE = 10 * 1024 * 1024
+
+# Allowed audio extensions
+_AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".webm", ".m4a", ".flac"}
 
 
 def _load_saved_prompt() -> str | None:
@@ -39,12 +46,22 @@ async def input_page(request: Request):
     app = request.app
     settings = app.state.settings
     saved = request.query_params.get("saved") == "1"
+    voice_result = request.query_params.get("voice_result")
 
     # Get current system prompt
     from audioshuttle.translator import SYSTEM_PROMPT
 
     saved_prompt = _load_saved_prompt()
     current_prompt = saved_prompt if saved_prompt is not None else SYSTEM_PROMPT
+
+    # Check STT availability
+    stt_available = False
+    try:
+        from audioshuttle.stt import STTEngine
+
+        stt_available = STTEngine().available
+    except Exception:
+        pass
 
     return app.state.templates.TemplateResponse(
         request,
@@ -55,6 +72,9 @@ async def input_page(request: Request):
             "chat_api_url": settings.chat_api_url,
             "chat_model_name": settings.chat_model_name,
             "saved": saved,
+            "voice_cleanup": settings.voice_cleanup,
+            "stt_available": stt_available,
+            "voice_result": voice_result,
         },
     )
 
@@ -79,3 +99,72 @@ async def save_system_prompt(request: Request, system_prompt: str = Form(...)):
         logger.error("Failed to save system prompt: %s", e)
 
     return RedirectResponse(url="/input?saved=1", status_code=303)
+
+
+@router.post("/input/voice", response_class=JSONResponse)
+async def process_voice(
+    request: Request,
+    audio_file: UploadFile = File(...),
+    cleanup: str = Form(""),
+):
+    """Process voice recording through the pipeline.
+
+    Accepts multipart upload with audio blob and cleanup toggle.
+    """
+    from audioshuttle.error_log import error_log
+
+    # Validate file size
+    content = await audio_file.read()
+    if len(content) > _MAX_VOICE_SIZE:
+        return JSONResponse(
+            {"success": False, "error": "Audio file too large (max 10 MB)"}
+        )
+
+    # Validate file type
+    filename = audio_file.filename or "voice.webm"
+    ext = Path(filename).suffix.lower()
+    if ext not in _AUDIO_EXTENSIONS:
+        return JSONResponse(
+            {"success": False, "error": f"Unsupported audio format: {ext}"}
+        )
+
+    # Check for voice pipeline on app state
+    voice_pipeline = getattr(request.app.state, "voice_pipeline", None)
+    if voice_pipeline is None:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Voice pipeline not initialized",
+            }
+        )
+
+    do_cleanup = cleanup == "on"
+
+    try:
+        result = await voice_pipeline.process_audio(
+            content, filename=filename, cleanup=do_cleanup
+        )
+        error_log.add(
+            f"Voice: '{result.get('transcription', '')}' → "
+            f"{'✓' if result['success'] else '✗ ' + (result.get('error') or '')}",
+            level="info" if result["success"] else "error",
+        )
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error("Voice pipeline error: %s", e)
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@router.post("/input/voice-settings", response_class=HTMLResponse)
+async def voice_settings(request: Request, cleanup: str = Form("")):
+    """Toggle the voice cleanup setting."""
+    from audioshuttle.error_log import error_log
+
+    app = request.app
+    app.state.settings.voice_cleanup = cleanup == "on"
+    error_log.add(
+        f"Voice cleanup {'enabled' if cleanup == 'on' else 'disabled'}",
+        level="info",
+    )
+
+    return RedirectResponse(url="/input", status_code=303)

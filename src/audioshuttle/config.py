@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     stt_device: str = "cpu"  # cpu or cuda (default cpu — no GPU contention)
     stt_compute_type: str = "int8"  # int8 for CPU, float16 for GPU
 
+    # Voice pipeline
+    voice_hotkey: str = "alt+space"  # global hotkey combo
+    voice_cleanup: bool = True  # E2B formatting pass on voice input
+    voice_sample_rate: int = 16000  # recording sample rate (Whisper prefers 16kHz)
+
     # Web UI behavior
     auto_open_browser: bool = True  # auto-open browser on startup
     tray_enabled: bool = True  # show system tray icon

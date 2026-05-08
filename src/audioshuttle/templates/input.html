@@ -12,6 +12,184 @@
     </div>
 </form>
 
+<h2 style="margin-top: 24px;">🎙 Voice Commands</h2>
+
+{% if not stt_available %}
+<div style="background: #ea433522; border: 1px solid #ea4335; border-radius: 6px; padding: 12px; margin-bottom: 16px; color: #ea4335; font-size: 13px;">
+    Voice commands require faster-whisper. Install with: <code>pip install audioshuttle[stt]</code>
+</div>
+{% else %}
+<div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin-bottom: 16px;">
+    <!-- Cleanup Audio toggle -->
+    <form method="POST" action="/input/voice-settings" style="margin-bottom: 12px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: #c9d1d9;">
+            <input type="checkbox" name="cleanup" {% if voice_cleanup %}checked{% endif %}
+                   onchange="this.form.submit()"
+                   style="accent-color: #0f9b58; width: 16px; height: 16px;">
+            <span><strong>Clean up voice text with AI</strong> (recommended)</span>
+        </label>
+        <p style="color: #888; font-size: 11px; margin: 4px 0 0 28px;">
+            Removes filler words, normalizes language before sending to DAW translator
+        </p>
+    </form>
+
+    <!-- Voice recording UI -->
+    <div style="border-top: 1px solid #21262d; padding-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+            <button id="btn-record" onclick="startRecording()"
+                    style="width: 48px; height: 48px; border-radius: 50%; background: #ef4444; color: #fff; border: none; cursor: pointer; font-size: 20px; display: flex; align-items: center; justify-content: center; transition: box-shadow 0.2s;"
+                    title="Click to start recording">
+                🎤
+            </button>
+            <button id="btn-stop" onclick="stopRecording()" disabled
+                    style="width: 48px; height: 48px; border-radius: 50%; background: #555; color: #fff; border: none; cursor: pointer; font-size: 20px; display: flex; align-items: center; justify-content: center; opacity: 0.5;"
+                    title="Click to stop recording">
+                ⏹
+            </button>
+            <span id="recording-status" style="font-size: 13px; color: #888;">Click the mic to record</span>
+        </div>
+
+        <!-- Recording indicator -->
+        <div id="recording-indicator" style="display: none; margin-bottom: 12px;">
+            <span style="display: inline-block; width: 10px; height: 10px; background: #ef4444; border-radius: 50%; animation: pulse 1s infinite;"></span>
+            <span style="color: #ef4444; font-size: 13px; margin-left: 6px;">Recording...</span>
+        </div>
+
+        <!-- Processing indicator -->
+        <div id="processing-indicator" style="display: none; margin-bottom: 12px;">
+            <span style="color: #58a6ff; font-size: 13px;">⏳ Transcribing...</span>
+        </div>
+
+        <!-- Result area -->
+        <div id="voice-result" style="display: none; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px;">
+            <div style="margin-bottom: 8px;">
+                <span style="font-size: 11px; color: #888; text-transform: uppercase;">Heard:</span>
+                <p id="result-raw" style="color: #c9d1d9; font-size: 14px; margin: 4px 0;"></p>
+            </div>
+            <div id="result-formatted-row" style="display: none; margin-bottom: 8px;">
+                <span style="font-size: 11px; color: #888; text-transform: uppercase;">Cleaned:</span>
+                <p id="result-formatted" style="color: #0f9b58; font-size: 14px; margin: 4px 0;"></p>
+            </div>
+            <div id="result-command-row" style="display: none; margin-bottom: 8px;">
+                <span style="font-size: 11px; color: #888; text-transform: uppercase;">Command:</span>
+                <code id="result-command" style="color: #58a6ff; font-size: 12px;"></code>
+            </div>
+            <div id="result-error" style="display: none; color: #ea4335; font-size: 13px;"></div>
+        </div>
+    </div>
+</div>
+
+<style>
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+#btn-record:hover { box-shadow: 0 0 16px #ef444466; }
+#btn-record.recording { animation: pulse 1s infinite; box-shadow: 0 0 20px #ef444466; }
+</style>
+
+<script>
+let mediaRecorder = null;
+let audioChunks = [];
+
+async function startRecording() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop());
+            const blob = new Blob(audioChunks, { type: 'audio/webm' });
+            await sendVoice(blob);
+        };
+
+        mediaRecorder.start();
+
+        // Update UI
+        document.getElementById('btn-record').disabled = true;
+        document.getElementById('btn-record').classList.add('recording');
+        document.getElementById('btn-stop').disabled = false;
+        document.getElementById('btn-stop').style.opacity = '1';
+        document.getElementById('recording-indicator').style.display = 'block';
+        document.getElementById('recording-status').textContent = 'Recording... click stop when done';
+        document.getElementById('voice-result').style.display = 'none';
+    } catch (err) {
+        document.getElementById('recording-status').textContent =
+            err.name === 'NotAllowedError' ? 'Microphone access denied' :
+            err.name === 'NotFoundError' ? 'No microphone detected' :
+            'Error: ' + err.message;
+    }
+}
+
+function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+    }
+
+    // Update UI
+    document.getElementById('btn-record').disabled = false;
+    document.getElementById('btn-record').classList.remove('recording');
+    document.getElementById('btn-stop').disabled = true;
+    document.getElementById('btn-stop').style.opacity = '0.5';
+    document.getElementById('recording-indicator').style.display = 'none';
+    document.getElementById('processing-indicator').style.display = 'block';
+    document.getElementById('recording-status').textContent = 'Processing...';
+}
+
+async function sendVoice(blob) {
+    const cleanup = document.querySelector('input[name="cleanup"]');
+    const formData = new FormData();
+    formData.append('audio_file', blob, 'voice.webm');
+    formData.append('cleanup', cleanup && cleanup.checked ? 'on' : '');
+
+    try {
+        const resp = await fetch('/input/voice', { method: 'POST', body: formData });
+        const result = await resp.json();
+
+        document.getElementById('processing-indicator').style.display = 'none';
+        document.getElementById('voice-result').style.display = 'block';
+
+        document.getElementById('result-raw').textContent = result.transcription || '(nothing)';
+
+        if (result.formatted) {
+            document.getElementById('result-formatted-row').style.display = 'block';
+            document.getElementById('result-formatted').textContent = result.formatted;
+        } else {
+            document.getElementById('result-formatted-row').style.display = 'none';
+        }
+
+        if (result.command) {
+            document.getElementById('result-command-row').style.display = 'block';
+            document.getElementById('result-command').textContent = JSON.stringify(result.command);
+        } else {
+            document.getElementById('result-command-row').style.display = 'none';
+        }
+
+        if (result.error) {
+            document.getElementById('result-error').style.display = 'block';
+            document.getElementById('result-error').textContent = result.error;
+        } else {
+            document.getElementById('result-error').style.display = 'none';
+        }
+
+        document.getElementById('recording-status').textContent =
+            result.success ? '✓ Command executed' : '✗ ' + (result.error || 'Failed');
+    } catch (err) {
+        document.getElementById('processing-indicator').style.display = 'none';
+        document.getElementById('voice-result').style.display = 'block';
+        document.getElementById('result-error').style.display = 'block';
+        document.getElementById('result-error').textContent = 'Network error: ' + err.message;
+        document.getElementById('recording-status').textContent = 'Error sending audio';
+    }
+}
+</script>
+{% endif %}
+
 <h2>AI Client</h2>
 <div style="background: #16213e; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
     <div style="margin-bottom: 6px;"><span class="label">Chat API URL:</span> <code style="color: #0f9b58;">{{ chat_api_url }}</code></div>
