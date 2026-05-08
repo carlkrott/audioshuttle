@@ -55,4 +55,53 @@
 {% else %}
 <p class="empty">No OSC mappings loaded — bridge not connected</p>
 {% endif %}
+
+<h2 style="margin-top: 24px;">Track Presets</h2>
+<div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px;">
+    <div style="display:flex; gap:8px; margin-bottom:12px; align-items:center;">
+        <input type="text" id="preset-name" placeholder="Preset name..." style="flex:1; background:#161b22; border:1px solid #30363d; color:#eee; padding:6px 10px; border-radius:4px; font-size:13px;">
+        <button onclick="savePreset()" style="background:#0f9b58; color:#fff; border:none; padding:6px 14px; border-radius:4px; cursor:pointer; font-size:13px;">Save Current</button>
+    </div>
+    <div id="presets-list" style="font-size:13px; color:#888;">Loading...</div>
+</div>
+
+<script>
+async function loadPresets() {
+    try {
+        const resp = await fetch('/output/presets');
+        const presets = await resp.json();
+        const el = document.getElementById('presets-list');
+        if (!presets.length) { el.textContent = 'No saved presets'; return; }
+        el.innerHTML = presets.map(p =>
+            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #21262d;">' +
+            '<span style="color:#c9d1d9;">' + p.name + '</span>' +
+            '<button onclick="loadPreset(\'' + p.name + '\')" style="background:#58a6ff22;color:#58a6ff;border:none;padding:2px 10px;border-radius:3px;cursor:pointer;font-size:12px;">Load</button>' +
+            '</div>'
+        ).join('');
+    } catch(e) { document.getElementById('presets-list').textContent = 'Error loading presets'; }
+}
+
+async function savePreset() {
+    const name = document.getElementById('preset-name').value.trim();
+    if (!name) return;
+    const resp = await fetch('/output/preset/save', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({name, tracks:{}, master_volume:1.0})
+    });
+    const result = await resp.json();
+    alert(result.message);
+    if (result.success) loadPresets();
+}
+
+async function loadPreset(name) {
+    const resp = await fetch('/output/preset/load', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({name})
+    });
+    const result = await resp.json();
+    alert(result.message);
+}
+
+loadPresets();
+</script>
 {% endblock %}

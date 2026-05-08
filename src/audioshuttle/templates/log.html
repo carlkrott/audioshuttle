@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .log-filters {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+    }
+    .log-filters a {
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        text-decoration: none;
+        color: #888;
+        background: #21262d;
+        transition: color 0.15s, background 0.15s;
+    }
+    .log-filters a:hover { color: #eee; background: #30363d; }
+    .log-filters a.active { color: #fff; background: #0f3460; }
+    .log-list {
+        max-height: 500px;
+        overflow-y: auto;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-family: "SF Mono", "Fira Code", monospace;
+        font-size: 12px;
+        line-height: 1.7;
+    }
+    .log-entry.info { color: #0f9b58; }
+    .log-entry.warning { color: #fbbc04; }
+    .log-entry.error { color: #ea4335; }
+    .log-entry.debug { color: #58a6ff; }
+    .log-empty { color: #555; font-style: italic; padding: 16px; }
+</style>
+
+<h2 class="section-header" style="border-left-color: #fbbc04;">Command Log</h2>
+
+<div class="log-filters">
+    <a href="/log" class="{{ 'active' if not active_filter }}">All</a>
+    <a href="/log/filter/info" class="{{ 'active' if active_filter == 'info' }}">Info</a>
+    <a href="/log/filter/warning" class="{{ 'active' if active_filter == 'warning' }}">Warning</a>
+    <a href="/log/filter/error" class="{{ 'active' if active_filter == 'error' }}">Error</a>
+</div>
+
+{% if entries %}
+<div class="log-list" id="log-list">
+    {% for entry in entries %}
+    <div class="log-entry {{ entry.level|lower }}">[{{ entry.timestamp[:19] }}] {{ entry.level|upper }}: {{ entry.message }}</div>
+    {% endfor %}
+</div>
+<script>
+    // Auto-scroll to bottom
+    const logList = document.getElementById('log-list');
+    logList.scrollTop = logList.scrollHeight;
+</script>
+{% else %}
+<p class="log-empty">No log entries</p>
+{% endif %}
+{% endblock %}

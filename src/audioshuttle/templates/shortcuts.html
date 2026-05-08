@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .search-box {
+        width: 100%;
+        padding: 10px 14px;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        color: #eee;
+        font-size: 14px;
+        margin-bottom: 16px;
+    }
+    .search-box:focus { outline: none; border-color: #0f9b58; }
+
+    .tool-category {
+        margin-bottom: 20px;
+    }
+    .tool-category h3 {
+        font-size: 14px;
+        color: #58a6ff;
+        margin-bottom: 8px;
+        padding-left: 8px;
+        border-left: 3px solid #58a6ff;
+    }
+    .tool-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    .tool-table th {
+        text-align: left;
+        padding: 6px 10px;
+        background: #21262d;
+        color: #888;
+        font-weight: 600;
+        border-bottom: 1px solid #30363d;
+    }
+    .tool-table td {
+        padding: 6px 10px;
+        border-bottom: 1px solid #21262d;
+    }
+    .tool-table tr:hover { background: #161b22; }
+    .tool-name {
+        font-family: "SF Mono", "Fira Code", monospace;
+        color: #0f9b58;
+    }
+    .tool-example {
+        font-family: "SF Mono", "Fira Code", monospace;
+        color: #c9d1d9;
+        font-size: 12px;
+    }
+    .tool-params {
+        color: #888;
+        font-size: 12px;
+    }
+</style>
+
+<h2 class="section-header" style="border-left-color: #58a6ff;">MCP Tools Reference (20)</h2>
+
+<input type="text" class="search-box" placeholder="Search tools..." id="tool-search" oninput="filterTools(this.value)">
+
+{% for category in categories %}
+<div class="tool-category" data-category>
+    <h3>{{ category.name }}</h3>
+    <table class="tool-table">
+        <thead>
+            <tr><th>Tool</th><th>Description</th><th>Example</th><th>Parameters</th></tr>
+        </thead>
+        <tbody>
+            {% for tool in category.tools %}
+            <tr data-tool-row>
+                <td class="tool-name">{{ tool.name }}</td>
+                <td>{{ tool.desc }}</td>
+                <td class="tool-example">{{ tool.example }}</td>
+                <td class="tool-params">{{ tool.params }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endfor %}
+
+<script>
+function filterTools(query) {
+    const q = query.toLowerCase();
+    document.querySelectorAll('[data-tool-row]').forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(q) ? '' : 'none';
+    });
+    // Hide empty categories
+    document.querySelectorAll('[data-category]').forEach(cat => {
+        const visible = cat.querySelectorAll('[data-tool-row]:not([style*="display: none"])');
+        cat.style.display = visible.length > 0 ? '' : 'none';
+    });
+}
+</script>
+{% endblock %}
