@@ -83,44 +83,41 @@ async def midi_send(
         }
         return RedirectResponse(url="/midi", status_code=303)
 
-    # Construct prompt for E2B
+    # Use the translator to interpret the user's description + pattern context
+    # This ensures only valid tools are used (not invented ones like add_midi_track)
+    translator = getattr(app.state, "translator", None)
+    bridge = getattr(app.state, "bridge", None)
+
+    if translator is None or bridge is None:
+        app.state.midi_send_result = {
+            "success": False,
+            "message": "Translator not available.",
+        }
+        return RedirectResponse(url="/midi", status_code=303)
+
     role = pattern.get("role", "drums")
-    pattern_json = json.dumps(pattern["pattern"][:4])  # First 4 bars for context
-    prompt = (
-        f"You are a DAW assistant. The user wants to add a {role} MIDI pattern to their project.\n"
-        f"Pattern (first 4 bars): {pattern_json}\n"
-        f"User instruction: {description.strip()}\n\n"
-        f"Respond with the DAW command to set up this track. "
-        f"Use JSON format: {{\"tool\": \"...\", \"args\": {{...}}}}"
+    pattern_summary = json.dumps(pattern["pattern"][:4])  # First 4 bars
+
+    # Combine the MIDI context with the user's description for the translator
+    combined_input = (
+        f"[MIDI Pattern: {role}, first 4 bars: {pattern_summary}] "
+        f"{description.strip()}"
     )
 
     try:
-        response = model_server.chat(
-            [{"role": "user", "content": prompt}],
-            max_tokens=1024,
-        )
-        if response:
-            # Try to execute via translator/bridge
-            translator = getattr(app.state, "translator", None)
-            bridge = getattr(app.state, "bridge", None)
-            if translator and bridge:
-                from audioshuttle.models import DAWState
+        from audioshuttle.models import DAWState
 
-                result = translator.translate(description.strip(), DAWState())
-                app.state.midi_send_result = {
-                    "success": result.success,
-                    "message": f"E2B response: {response[:200]}",
-                    "command": result.tool or "N/A",
-                }
-            else:
-                app.state.midi_send_result = {
-                    "success": True,
-                    "message": f"E2B interpreted: {response[:200]}",
-                }
+        result = translator.translate(combined_input, DAWState())
+        if result.success:
+            app.state.midi_send_result = {
+                "success": True,
+                "message": f"Executed: {result.tool}({result.args}) via {result.method}",
+                "command": result.tool,
+            }
         else:
             app.state.midi_send_result = {
                 "success": False,
-                "message": "E2B returned empty response.",
+                "message": f"Could not interpret: {result.error}",
             }
     except Exception as e:
         logger.warning("MIDI send error: %s", e)
