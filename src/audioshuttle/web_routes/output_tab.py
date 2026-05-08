@@ -188,6 +188,65 @@ async def load_preset(request: Request):
     return {"success": True, "message": f"Preset '{safe_name}' loaded ({applied} changes applied)"}
 
 
+@router.post("/output/preset/rename", response_class=JSONResponse)
+async def rename_preset(request: Request):
+    """Rename a saved track preset."""
+    body = await request.json()
+    old_name = body.get("old_name", "").strip()
+    new_name = body.get("new_name", "").strip()
+    if not old_name or not new_name:
+        return {"success": False, "message": "Both names required"}
+
+    safe_old = "".join(c for c in old_name if c.isalnum() or c in (" ", "-", "_")).strip()
+    safe_new = "".join(c for c in new_name if c.isalnum() or c in (" ", "-", "_")).strip()
+    old_path = PRESETS_DIR / f"{safe_old}.json"
+    new_path = PRESETS_DIR / f"{safe_new}.json"
+
+    if not old_path.exists():
+        return {"success": False, "message": f"Preset '{safe_old}' not found"}
+    if new_path.exists():
+        return {"success": False, "message": f"Preset '{safe_new}' already exists"}
+
+    old_path.rename(new_path)
+    from audioshuttle.error_log import error_log
+    error_log.add(f"Preset renamed: {safe_old} → {safe_new}", level="info")
+    return {"success": True, "message": f"Renamed to '{safe_new}'"}
+
+
+@router.post("/output/preset/delete", response_class=JSONResponse)
+async def delete_preset(request: Request):
+    """Delete a saved track preset."""
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        return {"success": False, "message": "Preset name required"}
+
+    safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
+    preset_path = PRESETS_DIR / f"{safe_name}.json"
+
+    if not preset_path.exists():
+        return {"success": False, "message": f"Preset '{safe_name}' not found"}
+
+    preset_path.unlink()
+    from audioshuttle.error_log import error_log
+    error_log.add(f"Preset deleted: {safe_name}", level="info")
+    return {"success": True, "message": f"Preset '{safe_name}' deleted"}
+
+
+@router.post("/output/disconnect", response_class=HTMLResponse)
+async def disconnect_daw(request: Request):
+    """Clear the DAW connection state."""
+    from audioshuttle.error_log import error_log
+
+    app = request.app
+    bridge = app.state.bridge
+    if bridge and hasattr(bridge, "_reaper_seen"):
+        bridge._reaper_seen = False
+        bridge._last_feedback_time = 0
+    error_log.add("DAW connection cleared — will reconnect on next feedback", level="warning")
+    return RedirectResponse(url="/output?rescanned=1", status_code=303)
+
+
 @router.get("/output/state-snapshot", response_class=JSONResponse)
 async def state_snapshot(request: Request):
     """Get current DAW state as JSON snapshot."""

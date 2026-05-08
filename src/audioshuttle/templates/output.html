@@ -37,7 +37,10 @@
 <h2>Connection</h2>
 <div style="background: #16213e; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
     <div><span class="label">Host:</span> <code style="color: #0f9b58;">{{ reaper_host }}</code></div>
-    <div><span class="label">Port:</span> <code style="color: #0f9b58;">{{ reaper_port }}</code></div>
+    <div style="margin-bottom: 8px;"><span class="label">Port:</span> <code style="color: #0f9b58;">{{ reaper_port }}</code></div>
+    <form method="POST" action="/output/disconnect" style="display: inline;">
+        <button type="submit" style="background: #ea4335; color: #fff; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px;">Disconnect</button>
+    </form>
 </div>
 
 <h2>OSC Address Mappings</h2>
@@ -73,10 +76,13 @@ async function loadPresets() {
         const el = document.getElementById('presets-list');
         if (!presets.length) { el.textContent = 'No saved presets'; return; }
         el.innerHTML = presets.map(p =>
-            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #21262d;">' +
-            '<span style="color:#c9d1d9;">' + p.name + '</span>' +
-            '<button onclick="loadPreset(\'' + p.name + '\')" style="background:#58a6ff22;color:#58a6ff;border:none;padding:2px 10px;border-radius:3px;cursor:pointer;font-size:12px;">Load</button>' +
-            '</div>'
+            '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #21262d;gap:8px;">' +
+            '<span style="color:#c9d1d9;flex:1;">' + p.name + '</span>' +
+            '<div style="display:flex;gap:4px;">' +
+            '<button onclick="loadPreset(\'' + p.name.replace(/'/g, "\\'") + '\')" style="background:#58a6ff22;color:#58a6ff;border:none;padding:2px 10px;border-radius:3px;cursor:pointer;font-size:12px;">Load</button>' +
+            '<button onclick="renamePreset(\'' + p.name.replace(/'/g, "\\'") + '\')" style="background:#30363d;color:#aaa;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:12px;">Rename</button>' +
+            '<button onclick="deletePreset(\'' + p.name.replace(/'/g, "\\'") + '\')" style="background:#ea433522;color:#ea4335;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:12px;">✕</button>' +
+            '</div></div>'
         ).join('');
     } catch(e) { document.getElementById('presets-list').textContent = 'Error loading presets'; }
 }
@@ -100,6 +106,29 @@ async function loadPreset(name) {
     });
     const result = await resp.json();
     alert(result.message);
+}
+
+async function renamePreset(name) {
+    const newName = prompt('New name for "' + name + '":', name);
+    if (!newName || newName === name) return;
+    const resp = await fetch('/output/preset/rename', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({old_name: name, new_name: newName})
+    });
+    const result = await resp.json();
+    alert(result.message);
+    if (result.success) loadPresets();
+}
+
+async function deletePreset(name) {
+    if (!confirm('Delete preset "' + name + '"?')) return;
+    const resp = await fetch('/output/preset/delete', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({name})
+    });
+    const result = await resp.json();
+    alert(result.message);
+    if (result.success) loadPresets();
 }
 
 loadPresets();

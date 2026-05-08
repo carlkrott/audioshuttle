@@ -101,6 +101,25 @@ async def save_system_prompt(request: Request, system_prompt: str = Form(...)):
     return RedirectResponse(url="/input?saved=1", status_code=303)
 
 
+@router.post("/input/system-prompt/reset", response_class=HTMLResponse)
+async def reset_system_prompt(request: Request):
+    """Reset system prompt to the built-in default."""
+    from audioshuttle.error_log import error_log
+    from audioshuttle.translator import SYSTEM_PROMPT as DEFAULT_PROMPT, update_system_prompt
+
+    try:
+        # Remove saved file so default is used
+        if _PROMPT_FILE.exists():
+            _PROMPT_FILE.unlink()
+        # Update in-memory
+        update_system_prompt(DEFAULT_PROMPT)
+        error_log.add("System prompt reset to default", level="info")
+    except Exception as e:
+        error_log.add(f"Failed to reset system prompt: {e}")
+
+    return RedirectResponse(url="/input?saved=1", status_code=303)
+
+
 @router.post("/input/voice", response_class=JSONResponse)
 async def process_voice(
     request: Request,

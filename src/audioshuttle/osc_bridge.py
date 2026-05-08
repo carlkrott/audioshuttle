@@ -186,6 +186,7 @@ class ReaperOSC:
                 logger.info("Reaper probe sent — marking as seen")
                 self._reaper_seen = True
                 self._last_feedback_time = time.time()
+                self._log_event("Reaper detected (active probe)", "info")
             return True
         except Exception:
             return False
@@ -248,6 +249,8 @@ class ReaperOSC:
         try:
             self._client.send_message(address, list(args))
             logger.debug("Sent: %s %s", address, args)
+            # Log significant commands to error_log for the Log tab
+            self._log_command(address, args)
             # If Reaper has been seen before, treat successful sends as
             # connection evidence (Reaper's OSC only sends feedback on
             # state changes, not in response to queries).
@@ -261,6 +264,30 @@ class ReaperOSC:
         except Exception as e:
             logger.error("Failed to send %s: %s", address, e)
             return CommandResult(success=False, address=address, error=str(e))
+
+    def _log_command(self, address: str, args: tuple) -> None:
+        """Log OSC commands to the error_log for the Log tab."""
+        try:
+            from audioshuttle.error_log import error_log
+
+            # Skip noisy polling commands
+            if address in ("/track/1/name", "/track/count", "/marker/count"):
+                return
+            # Format a human-readable message
+            msg = f"OSC → {address}"
+            if args:
+                msg += f" {list(args)}"
+            error_log.add(msg, level="info")
+        except Exception:
+            pass
+
+    def _log_event(self, message: str, level: str = "info") -> None:
+        """Log a bridge event to the error_log for the Log tab."""
+        try:
+            from audioshuttle.error_log import error_log
+            error_log.add(message, level=level)
+        except Exception:
+            pass
 
     # ── Transport ───────────────────────────────────────────────
 
@@ -507,6 +534,7 @@ class ReaperOSC:
                 "Reaper feedback received — reconnected after %.1fs offline",
                 now - self._disconnected_since,
             )
+            self._log_event(f"Reaper reconnected after {now - self._disconnected_since:.0f}s offline", "info")
             self._disconnected_since = None
 
         self._last_feedback_time = now
@@ -641,6 +669,7 @@ class ReaperOSC:
                         "Reaper disconnected — no feedback for %.1fs",
                         time_since_feedback,
                     )
+                    self._log_event("Reaper disconnected", "warning")
                 elif (now - self._disconnected_since) > self._warning_after:
                     # Extended disconnection — log periodic warning and attempt reconnect
                     logger.warning(

@@ -51,7 +51,9 @@
         height: 24px;
         border-radius: 3px;
         transition: opacity 0.15s;
+        cursor: pointer;
     }
+    .seq-cell:hover { opacity: 0.8; transform: scale(1.1); }
     .seq-cell.off { background: #21262d; }
     .seq-cell.low { background: #1a5c3a; opacity: 0.7; }
     .seq-cell.mid { background: #0f9b58; }
@@ -132,13 +134,13 @@
     {% for bar in pattern.pattern %}
         {% for step in bar %}
             {% if step == 0 %}
-            <div class="seq-cell off"></div>
+            <div class="seq-cell off" data-vel="0" onclick="toggleCell(this)"></div>
             {% elif step < 65 %}
-            <div class="seq-cell low" title="vel: {{ step }}"></div>
+            <div class="seq-cell low" data-vel="{{ step }}" title="vel: {{ step }}" onclick="toggleCell(this)"></div>
             {% elif step < 100 %}
-            <div class="seq-cell mid" title="vel: {{ step }}"></div>
+            <div class="seq-cell mid" data-vel="{{ step }}" title="vel: {{ step }}" onclick="toggleCell(this)"></div>
             {% else %}
-            <div class="seq-cell high" title="vel: {{ step }}"></div>
+            <div class="seq-cell high" data-vel="{{ step }}" title="vel: {{ step }}" onclick="toggleCell(this)"></div>
             {% endif %}
         {% endfor %}
     {% endfor %}
@@ -163,4 +165,26 @@
 {% else %}
 <p style="color:#555;font-style:italic;">Select a role and click Randomize to generate a pattern.</p>
 {% endif %}
+
+<script>
+// Click-to-toggle: cycle off → low → mid → high → off
+function toggleCell(el) {
+    const vel = parseInt(el.dataset.vel || '0');
+    let newVel, newClass;
+
+    if (vel === 0) {
+        newVel = 40; newClass = 'low';
+    } else if (vel < 65) {
+        newVel = 80; newClass = 'mid';
+    } else if (vel < 100) {
+        newVel = 120; newClass = 'high';
+    } else {
+        newVel = 0; newClass = 'off';
+    }
+
+    el.dataset.vel = newVel;
+    el.className = 'seq-cell ' + newClass;
+    el.title = newVel > 0 ? 'vel: ' + newVel : '';
+}
+</script>
 {% endblock %}

@@ -7,8 +7,11 @@
 {% endif %}
 <form method="POST" action="/input/system-prompt">
     <textarea name="system_prompt" rows="20" style="width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; resize: vertical;">{{ system_prompt }}</textarea>
-    <div style="margin-top: 8px;">
+    <div style="margin-top: 8px; display: flex; gap: 8px;">
         <button type="submit" style="background: #0f9b58; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Save</button>
+        <form method="POST" action="/input/system-prompt/reset" style="display:inline;">
+            <button type="submit" style="background: #30363d; color: #aaa; border: 1px solid #444; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Reset to Default</button>
+        </form>
     </div>
 </form>
 
@@ -32,6 +35,21 @@
             Removes filler words, normalizes language before sending to DAW translator
         </p>
     </form>
+
+    <!-- Mic setup / test -->
+    <div style="border-top: 1px solid #21262d; padding-top: 12px; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <span style="font-size: 13px; color: #c9d1d9;">🎤 Microphone:</span>
+            <select id="mic-select" onchange="selectMic()" style="background: #161b22; border: 1px solid #30363d; color: #eee; padding: 4px 8px; border-radius: 4px; font-size: 12px;">
+                <option value="">Default</option>
+            </select>
+            <button onclick="testMic()" style="background: #30363d; color: #aaa; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">Test</button>
+            <span id="mic-status" style="font-size: 12px; color: #888;"></span>
+        </div>
+        <div id="mic-meter" style="display: none; height: 4px; background: #0d1117; border-radius: 2px; overflow: hidden; margin-bottom: 8px;">
+            <div id="mic-meter-bar" style="height: 100%; width: 0%; background: #0f9b58; transition: width 0.1s;"></div>
+        </div>
+    </div>
 
     <!-- Voice recording UI -->
     <div style="border-top: 1px solid #21262d; padding-top: 12px;">
@@ -91,10 +109,97 @@
 <script>
 let mediaRecorder = null;
 let audioChunks = [];
+let selectedMicId = null;
+
+// Enumerate microphones on page load
+async function enumMics() {
+    try {
+        // Need permission first to see device labels
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tempStream.getTracks().forEach(t => t.stop());
+
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const mics = devices.filter(d => d.kind === 'audioinput');
+        const select = document.getElementById('mic-select');
+        select.innerHTML = '<option value="">Default</option>';
+        mics.forEach((m, i) => {
+            const opt = document.createElement('option');
+            opt.value = m.deviceId;
+            opt.textContent = m.label || `Microphone ${i + 1}`;
+            select.appendChild(opt);
+        });
+        document.getElementById('mic-status').textContent = `${mics.length} mic(s) found`;
+        document.getElementById('mic-status').style.color = '#0f9b58';
+    } catch (err) {
+        document.getElementById('mic-status').textContent = 'Mic access denied';
+        document.getElementById('mic-status').style.color = '#ea4335';
+    }
+}
+
+function selectMic() {
+    selectedMicId = document.getElementById('mic-select').value || null;
+}
+
+// Test mic — shows live level meter for 3 seconds
+async function testMic() {
+    const statusEl = document.getElementById('mic-status');
+    const meterEl = document.getElementById('mic-meter');
+    const barEl = document.getElementById('mic-meter-bar');
+
+    try {
+        const constraints = selectedMicId
+            ? { audio: { deviceId: { exact: selectedMicId } } }
+            : { audio: true };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const ctx = new AudioContext();
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        meterEl.style.display = 'block';
+        statusEl.textContent = 'Listening... speak now';
+        statusEl.style.color = '#58a6ff';
+
+        const startTime = Date.now();
+        function update() {
+            analyser.getByteFrequencyData(dataArray);
+            const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+            const pct = Math.min(100, (avg / 128) * 100);
+            barEl.style.width = pct + '%';
+            barEl.style.background = pct > 60 ? '#4caf50' : pct > 20 ? '#0f9b58' : '#fbbc04';
+
+            if (Date.now() - startTime < 3000) {
+                requestAnimationFrame(update);
+            } else {
+                stream.getTracks().forEach(t => t.stop());
+                ctx.close();
+                meterEl.style.display = 'none';
+                statusEl.textContent = '✓ Mic working';
+                statusEl.style.color = '#0f9b58';
+            }
+        }
+        update();
+    } catch (err) {
+        statusEl.textContent = err.name === 'NotAllowedError'
+            ? '❌ Permission denied — allow mic in browser settings'
+            : err.name === 'NotFoundError'
+            ? '❌ No microphone detected — check connections'
+            : '❌ ' + err.message;
+        statusEl.style.color = '#ea4335';
+    }
+}
+
+// Enumerate on load
+enumMics();
 
 async function startRecording() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const constraints = selectedMicId
+            ? { audio: { deviceId: { exact: selectedMicId } } }
+            : { audio: true };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
         mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
         audioChunks = [];
 
@@ -119,10 +224,12 @@ async function startRecording() {
         document.getElementById('recording-status').textContent = 'Recording... click stop when done';
         document.getElementById('voice-result').style.display = 'none';
     } catch (err) {
-        document.getElementById('recording-status').textContent =
-            err.name === 'NotAllowedError' ? 'Microphone access denied' :
-            err.name === 'NotFoundError' ? 'No microphone detected' :
-            'Error: ' + err.message;
+        const statusEl = document.getElementById('recording-status');
+        statusEl.style.color = '#ea4335';
+        statusEl.textContent =
+            err.name === 'NotAllowedError' ? '❌ Microphone access denied — check browser permissions' :
+            err.name === 'NotFoundError' ? '❌ No microphone detected — check audio connections' :
+            '❌ Error: ' + err.message;
     }
 }
 
@@ -190,24 +297,74 @@ async function sendVoice(blob) {
 </script>
 {% endif %}
 
-<h2>AI Client</h2>
+<h2>AI Client Integration</h2>
 <div style="background: #16213e; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
     <div style="margin-bottom: 6px;"><span class="label">Chat API URL:</span> <code style="color: #0f9b58;">{{ chat_api_url }}</code></div>
     <div><span class="label">Model Name:</span> <code style="color: #0f9b58;">{{ chat_model_name }}</code></div>
     <p style="color: #555; font-size: 12px; margin-top: 8px;">Configure via AUDIOSHUTTLE_CHAT_API_URL and AUDIOSHUTTLE_CHAT_MODEL_NAME environment variables</p>
 </div>
 
-<h2>Preset AI Clients</h2>
-<table style="width: 100%; border-collapse: collapse;">
-    <tr style="border-bottom: 1px solid #30363d;">
-        <th style="text-align: left; padding: 8px; color: #888;">Client</th>
-        <th style="text-align: left; padding: 8px; color: #888;">Description</th>
-    </tr>
-    {% for client in ai_clients %}
-    <tr style="border-bottom: 1px solid #1a1a2e;">
-        <td style="padding: 8px;">{{ client.name }}</td>
-        <td style="padding: 8px; color: #888;">{{ client.description }}</td>
-    </tr>
-    {% endfor %}
-</table>
+<h2>MCP Server Configuration</h2>
+<p style="color: #aaa; font-size: 13px; margin-bottom: 12px;">
+    Add AudioShuttle's MCP server to your AI client so it can control your DAW. Copy the JSON for your tool:
+</p>
+
+<div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 12px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <strong style="color: #58a6ff; font-size: 13px;">Claude Code / Claude Desktop</strong>
+        <button onclick="copyMcp('claude')" style="background: #30363d; color: #aaa; border: none; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">Copy</button>
+    </div>
+    <pre id="mcp-claude" style="color: #c9d1d9; font-size: 11px; margin: 0; white-space: pre-wrap; word-break: break-all;">{
+  "mcpServers": {
+    "audioshuttle": {
+      "command": "python",
+      "args": ["-m", "audioshuttle", "--transport", "stdio"]
+    }
+  }
+}</pre>
+    <p style="color: #555; font-size: 11px; margin: 6px 0 0;">Add to <code>~/.claude/settings.json</code> or Claude Desktop's <code>claude_desktop_config.json</code></p>
+</div>
+
+<div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 12px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <strong style="color: #58a6ff; font-size: 13px;">Gemini CLI</strong>
+        <button onclick="copyMcp('gemini')" style="background: #30363d; color: #aaa; border: none; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">Copy</button>
+    </div>
+    <pre id="mcp-gemini" style="color: #c9d1d9; font-size: 11px; margin: 0; white-space: pre-wrap; word-break: break-all;">{
+  "mcpServers": {
+    "audioshuttle": {
+      "command": "python",
+      "args": ["-m", "audioshuttle", "--transport", "stdio"]
+    }
+  }
+}</pre>
+    <p style="color: #555; font-size: 11px; margin: 6px 0 0;">Add to <code>~/.gemini/settings.json</code></p>
+</div>
+
+<div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 12px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <strong style="color: #58a6ff; font-size: 13px;">SSE Client (Cursor, n8n, etc.)</strong>
+        <button onclick="copyMcp('sse')" style="background: #30363d; color: #aaa; border: none; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">Copy</button>
+    </div>
+    <pre id="mcp-sse" style="color: #c9d1d9; font-size: 11px; margin: 0; white-space: pre-wrap; word-break: break-all;">{
+  "mcpServers": {
+    "audioshuttle": {
+      "url": "http://localhost:8765/mcp/sse"
+    }
+  }
+}</pre>
+    <p style="color: #555; font-size: 11px; margin: 6px 0 0;">SSE endpoint — for clients that connect over HTTP (not stdio)</p>
+</div>
+
+<script>
+function copyMcp(id) {
+    const el = document.getElementById('mcp-' + id);
+    navigator.clipboard.writeText(el.textContent).then(() => {
+        const btn = el.parentElement.querySelector('button');
+        const orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = orig, 1500);
+    });
+}
+</script>
 {% endblock %}

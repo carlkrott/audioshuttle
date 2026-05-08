@@ -253,6 +253,25 @@ def launch(
     logger.info("  Tray:       %s", "active ✓" if tray else "off")
     logger.info("─" * 50)
 
+    # Log startup events to error_log (visible in Log tab)
+    try:
+        from audioshuttle.error_log import error_log
+        error_log.add("AudioShuttle started", level="info")
+        error_log.add(f"Web UI: http://{web_host}:{web_port}", level="info")
+        error_log.add(f"Reaper OSC: send={settings.reaper_port}, feedback={settings.reaper_feedback_port}", level="info")
+        if model_ok:
+            error_log.add("Model: Gemma E2B active", level="info")
+        else:
+            error_log.add("Model: disabled (--no-model)", level="warning")
+        if stt_ok:
+            error_log.add("STT: Whisper available", level="info")
+        else:
+            error_log.add("STT: not installed", level="warning")
+        error_log.add(f"Voice: {'Alt+Space hotkey' if hotkey_ok else 'web-only recording'}", level="info")
+        error_log.add(f"20 MCP tools registered", level="info")
+    except Exception:
+        pass
+
     # ── Main loop ──────────────────────────────────────────────
     if tray is not None:
         # Run tray in main thread (blocking)

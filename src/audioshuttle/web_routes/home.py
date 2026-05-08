@@ -120,16 +120,35 @@ async def transport_control(request: Request, action: str = Form(...)):
     bridge = app.state.bridge
 
     if bridge is not None and hasattr(bridge, "send_command"):
-        osc_map = {
-            "play": "/play",
-            "stop": "/stop",
-            "record": "/record",
-            "pause": "/pause",
-        }
-        address = osc_map.get(action)
-        if address:
-            result = bridge.send_command(address)
-            record_command(action, address, result.success)
+        from audioshuttle.error_log import error_log
+
+        # Special case: play during recording → stop record first, then play
+        if action == "play":
+            state = getattr(bridge, "_state", None)
+            is_recording = state and getattr(state.transport, "recording", False)
+            if is_recording:
+                # Stop recording first, then start playing
+                bridge.send_command("/stop")
+                import time
+                time.sleep(0.05)
+                result = bridge.send_command("/play", 1.0)
+                record_command(action, "/stop+/play", result.success)
+                error_log.add(f"Transport: stop recording + play", level="info")
+            else:
+                result = bridge.send_command("/play", 1.0)
+                record_command(action, "/play", result.success)
+                error_log.add(f"Transport: play", level="info")
+        else:
+            osc_map = {
+                "stop": "/stop",
+                "record": "/record",
+                "pause": "/pause",
+            }
+            address = osc_map.get(action)
+            if address:
+                result = bridge.send_command(address)
+                record_command(action, address, result.success)
+                error_log.add(f"Transport: {action}", level="info")
 
     return RedirectResponse(url="/", status_code=303)
 
@@ -138,16 +157,39 @@ async def transport_control(request: Request, action: str = Form(...)):
 async def replay_command(request: Request, cmd: str = ""):
     """Re-execute a command from history."""
     app = request.app
-    translator = getattr(app.state, "translator", None)
     bridge = app.state.bridge
 
-    if cmd and translator and bridge:
-        from audioshuttle.models import DAWState
+    # Sanitize — skip replay if the command looks like garbage (non-printable, too long, etc.)
+    cmd = cmd.strip()
+    if not cmd or len(cmd) > 200 or not all(c.isprintable() for c in cmd):
+        return RedirectResponse(url="/", status_code=303)
 
-        daw_state = DAWState()
-        result = translator.translate(cmd, daw_state)
-        if result.success and result.tool:
-            record_command(cmd, result.tool, True)
+    if bridge is None:
+        return RedirectResponse(url="/", status_code=303)
+
+    # Direct transport commands — replay via OSC directly
+    direct_transport = {"play", "stop", "record", "pause"}
+    if cmd in direct_transport:
+        result = bridge.send_command(f"/{cmd}")
+        record_command(cmd, f"/{cmd}", result.success)
+        from audioshuttle.error_log import error_log
+        error_log.add(f"Replay: {cmd}", level="info")
+    else:
+        # Natural language command — translate via translator
+        translator = getattr(app.state, "translator", None)
+        if translator:
+            from audioshuttle.models import DAWState
+
+            daw_state = DAWState()
+            result = translator.translate(cmd, daw_state)
+            if result.success and result.tool:
+                record_command(cmd, result.tool, True)
+                from audioshuttle.error_log import error_log
+                error_log.add(f"Replay NL: '{cmd}' → {result.tool}", level="info")
+            else:
+                record_command(cmd, "replay", False)
+                from audioshuttle.error_log import error_log
+                error_log.add(f"Replay failed: '{cmd}'", level="warning")
         else:
             record_command(cmd, "replay", False)
 
