@@ -39,6 +39,12 @@ def main() -> None:
         default=False,
         help="Don't show system tray icon",
     )
+    parser.add_argument(
+        "--no-model",
+        action="store_true",
+        default=False,
+        help="Don't start the embedded model server",
+    )
     args = parser.parse_args()
 
     from audioshuttle.config import Settings
@@ -54,6 +60,7 @@ def main() -> None:
         transport=args.transport,
         no_browser=no_browser,
         no_tray=no_tray,
+        no_model=args.no_model,
         host=args.host,
         port=args.port,
     )

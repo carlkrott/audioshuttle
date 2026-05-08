@@ -46,11 +46,13 @@ def test_home_contains_audiohuttle(client):
 
 
 def test_home_shows_error_log(client):
+    """Error log is now on /log tab, not home page."""
     from audioshuttle.error_log import error_log
 
     error_log.clear()
     error_log.add("Test error message for display")
-    resp = client.get("/")
+    # Error log moved to dedicated /log tab
+    resp = client.get("/log")
     assert "Test error message for display" in resp.text
     error_log.clear()
 
@@ -62,11 +64,12 @@ def test_home_status_badges(client):
 
 
 def test_home_no_errors_message(client):
+    """Home page shows activity section instead of error log."""
     from audioshuttle.error_log import error_log
 
     error_log.clear()
     resp = client.get("/")
-    assert "No errors logged" in resp.text
+    assert "Activity" in resp.text
 
 
 # ── Input tab tests ───────────────────────────────────────────

@@ -105,6 +105,33 @@
         padding-left: 10px;
         border-left: 3px solid #0f9b58;
     }
+
+    /* Activity feed */
+    .activity-feed {
+        max-height: 200px;
+        overflow-y: auto;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 12px;
+    }
+    .activity-entry {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 6px;
+        border-bottom: 1px solid #21262d;
+    }
+    .activity-entry:last-child { border-bottom: none; }
+
+    /* Mobile responsive */
+    @media (max-width: 600px) {
+        .status-cards { grid-template-columns: 1fr 1fr; }
+        .transport-row { justify-content: center; }
+    }
+    @media (max-width: 400px) {
+        .status-cards { grid-template-columns: 1fr; }
+    }
 </style>
 
 <h2 class="section-header">Status</h2>
@@ -174,6 +201,39 @@
             </span>
         </div>
     </div>
+
+    <!-- STT -->
+    <div class="status-card">
+        <div class="card-label">STT (Whisper)</div>
+        <div class="card-value">
+            {% if stt_available %}
+            <span class="pulse-dot green"></span> Available
+            {% else %}
+            <span class="badge badge-off">Not Installed</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Voice -->
+    <div class="status-card">
+        <div class="card-label">Voice</div>
+        <div class="card-value">
+            {% if voice_mode == 'hotkey' %}
+            <span class="pulse-dot green"></span> Alt+Space
+            {% elif voice_mode == 'web' %}
+            <span class="badge badge-warn">Web Only</span>
+            {% else %}
+            <span class="badge badge-off">Disabled</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;">
+    <a href="/output" style="background:#0f3460;color:#eee;padding:6px 14px;border-radius:6px;text-decoration:none;font-size:13px;transition:opacity 0.2s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1">Test Connection</a>
+    <a href="/input" style="background:#0f3460;color:#eee;padding:6px 14px;border-radius:6px;text-decoration:none;font-size:13px;transition:opacity 0.2s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1">Record Voice</a>
+    <a href="/midi" style="background:#0f3460;color:#eee;padding:6px 14px;border-radius:6px;text-decoration:none;font-size:13px;transition:opacity 0.2s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1">MIDI Generator</a>
 </div>
 
 <h2 class="section-header">Transport</h2>
@@ -213,11 +273,17 @@
 <p class="history-empty">No commands executed yet</p>
 {% endif %}
 
-<h2 class="section-header">Error Log</h2>
-{% if errors %}
-<pre id="error-log">{% for entry in errors|reverse %}[{{ entry.timestamp[:19] }}] {{ entry.level|upper }}: {{ entry.message }}
-{% endfor %}</pre>
+<h2 class="section-header">Activity</h2>
+{% if history %}
+<div class="activity-feed">
+    {% for entry in history[:5]|reverse %}
+    <div class="activity-entry">
+        <span class="history-cmd {{ 'success' if entry.success else 'error' }}">{{ entry.command }}</span>
+        <span class="history-time">{{ entry.timestamp[:19] }}</span>
+    </div>
+    {% endfor %}
+</div>
 {% else %}
-<p class="empty">No errors logged</p>
+<p class="history-empty">No commands executed yet</p>
 {% endif %}
 {% endblock %}

@@ -17,16 +17,20 @@ def launch(
     transport: str = "standalone",
     no_browser: bool = False,
     no_tray: bool = False,
+    no_model: bool = False,
     host: str | None = None,
     port: int | None = None,
 ) -> None:
     """Launch AudioShuttle with all components.
+
+    Each component starts independently — failures don't crash the whole app.
 
     Args:
         settings: Settings instance.
         transport: "standalone" (web + tray + MCP SSE) or "stdio" (MCP stdio only).
         no_browser: Don't auto-open browser.
         no_tray: Don't show system tray icon.
+        no_model: Don't start the embedded model server.
         host: Override web host.
         port: Override web port.
     """
@@ -34,7 +38,6 @@ def launch(
 
     from audioshuttle.config import Settings
     from audioshuttle.context_manager import ContextManager
-    from audioshuttle.model_server import ModelServer
     from audioshuttle.osc_bridge import ReaperOSC
     from audioshuttle.server import create_server
     from audioshuttle.translator import IntentTranslator
@@ -61,10 +64,10 @@ def launch(
     import subprocess as _sp
     import time as _time
 
-    for port in [web_port, settings.reaper_port + 92]:  # 8765, 8092
+    for cleanup_port in [web_port, settings.reaper_port + 92]:  # 8765, 8092
         try:
             result = _sp.run(
-                ["fuser", f"{port}/tcp"], capture_output=True, text=True, timeout=5,
+                ["fuser", f"{cleanup_port}/tcp"], capture_output=True, text=True, timeout=5,
             )
             if result.stdout.strip():
                 for pid_str in result.stdout.strip().split():
@@ -73,7 +76,7 @@ def launch(
                         if pid != _os.getpid():
                             logger.info(
                                 "Killing orphaned process on port %d (pid %d)",
-                                port, pid,
+                                cleanup_port, pid,
                             )
                             _os.kill(pid, 9)
                     except (ValueError, ProcessLookupError):
@@ -82,33 +85,68 @@ def launch(
             pass
     _time.sleep(1)
 
-    # ── Create shared components ───────────────────────────────
+    # ── Create shared components (each independent) ──────────
+
+    # OSC Bridge (required for DAW control)
     bridge = ReaperOSC(
         host=settings.reaper_host,
         send_port=settings.reaper_port,
         feedback_port=settings.reaper_feedback_port,
     )
 
-    # Start embedded model server
-    model_server: ModelServer | None = None
-    if settings.model_enabled:
-        model_server = ModelServer(settings)
+    # Embedded model server (optional — skip with --no-model)
+    model_server = None
+    model_ok = False
+    if not no_model and settings.model_enabled:
         try:
+            from audioshuttle.model_server import ModelServer
+
+            model_server = ModelServer(settings)
             started = model_server.start(wait=True, timeout=60.0)
             if started:
                 logger.info("E2B model server ready")
+                model_ok = True
             else:
-                logger.warning("E2B model server failed — fallback parser only")
+                logger.warning("E2B model server failed — text-only mode")
                 model_server = None
         except Exception as e:
-            logger.warning("E2B model server error: %s — fallback only", e)
+            logger.warning("E2B model server error: %s — text-only mode", e)
             model_server = None
+    else:
+        logger.info("Model server skipped (--no-model or disabled)")
 
     translator = IntentTranslator(model_server)
     context_manager = ContextManager(model_server, settings.memory_vault_path)
 
+    # STT availability check
+    stt_ok = False
+    try:
+        from audioshuttle.stt import STTEngine
+
+        stt_ok = STTEngine().available
+    except Exception:
+        pass
+
+    # Voice pipeline (optional)
+    voice_pipeline = None
+    hotkey_ok = False
+    if stt_ok:
+        try:
+            from audioshuttle.voice import VoicePipeline
+
+            stt_engine = STTEngine()
+            voice_pipeline = VoicePipeline(
+                stt_engine=stt_engine,
+                model_server=model_server,
+                bridge=bridge,
+                translator=translator,
+            )
+        except Exception as e:
+            logger.warning("Voice pipeline init failed: %s", e)
+
     # ── Shutdown coordination ──────────────────────────────────
     shutdown_event = threading.Event()
+    voice_hotkey = None
 
     def signal_handler(sig, frame):
         logger.info("Shutdown signal received")
@@ -135,8 +173,8 @@ def launch(
         translator=translator,
     )
 
-    # Also create MCP server (for future SSE mounting)
-    # mcp_server = create_server(settings)
+    # Attach voice pipeline to app state for web voice recording
+    web_app.state.voice_pipeline = voice_pipeline
 
     # Start web server in background thread
     web_config = uvicorn.Config(
@@ -156,23 +194,71 @@ def launch(
         threading.Timer(2.0, lambda: webbrowser.open(web_url)).start()
         logger.info("Browser will open in 2 seconds")
 
-    # Tray icon
+    # Voice hotkey (optional — best-effort)
+    if voice_pipeline is not None:
+        try:
+            from audioshuttle.hotkey import VoiceHotkey
+
+            voice_hotkey = VoiceHotkey(
+                voice_pipeline=voice_pipeline,
+                hotkey=settings.voice_hotkey,
+                sample_rate=settings.voice_sample_rate,
+            )
+            hotkey_ok = voice_hotkey.start()
+            if hotkey_ok:
+                logger.info("Voice hotkey '%s' registered", settings.voice_hotkey)
+            else:
+                logger.warning("Voice hotkey unavailable — use browser recording")
+        except Exception as e:
+            logger.warning("Voice hotkey failed: %s — web recording only", e)
+
+    # Tray icon (optional)
+    tray = None
     if not no_tray and settings.tray_enabled:
-        from audioshuttle.tray import create_icon
+        try:
+            from audioshuttle.tray import create_icon
 
-        def on_tray_quit():
-            logger.info("Quit from tray")
-            web_server.should_exit = True
-            shutdown_event.set()
+            def on_tray_quit():
+                logger.info("Quit from tray")
+                web_server.should_exit = True
+                shutdown_event.set()
 
-        tray = create_icon(
-            web_url=f"http://{web_host}:{web_port}",
-            on_quit=on_tray_quit,
-        )
+            # Build status tooltip
+            components = []
+            components.append(f"Model: {'running' if model_ok else 'off'}")
+            components.append(f"Reaper: {'connected' if hasattr(bridge, '_reaper_seen') else 'unknown'}")
+            components.append(f"STT: {'available' if stt_ok else 'off'}")
+            components.append(f"Hotkey: {'active' if hotkey_ok else 'web-only'}")
+            tooltip = "AudioShuttle — " + " | ".join(components)
 
+            tray = create_icon(
+                web_url=f"http://{web_host}:{web_port}",
+                on_quit=on_tray_quit,
+                tooltip=tooltip,
+                model_server=model_server,
+            )
+        except Exception as e:
+            logger.warning("Tray icon failed: %s", e)
+
+    # ── Startup summary ────────────────────────────────────────
+    logger.info("─" * 50)
+    logger.info("AudioShuttle started — Components:")
+    logger.info("  Web UI:     http://%s:%d ✓", web_host, web_port)
+    logger.info("  Reaper OSC: %s", "connected ✓" if True else "not found ✗")
+    logger.info("  Model:      %s", "Gemma E2B ✓" if model_ok else "off")
+    logger.info("  STT:        %s", "Whisper ✓" if stt_ok else "not installed")
+    logger.info("  Voice:      %s", "Alt+Space ✓" if hotkey_ok else "web-only")
+    logger.info("  Tray:       %s", "active ✓" if tray else "off")
+    logger.info("─" * 50)
+
+    # ── Main loop ──────────────────────────────────────────────
+    if tray is not None:
         # Run tray in main thread (blocking)
         logger.info("Starting system tray icon (Ctrl+C to quit)")
-        tray.start()
+        try:
+            tray.start()
+        except KeyboardInterrupt:
+            pass
     else:
         # No tray — block until shutdown
         logger.info("Running headless (Ctrl+C to quit)")
@@ -181,9 +267,40 @@ def launch(
         except KeyboardInterrupt:
             pass
 
-    # Cleanup
+    # ── Graceful shutdown ──────────────────────────────────────
     logger.info("Shutting down...")
+
+    # 1. Stop voice hotkey
+    if voice_hotkey is not None:
+        try:
+            voice_hotkey.stop()
+            logger.info("Voice hotkey stopped")
+        except Exception:
+            pass
+
+    # 2. Stop web server
     web_server.should_exit = True
+    logger.info("Web server stopping")
+
+    # 3. Stop model server
     if model_server is not None:
-        model_server.stop()
+        try:
+            model_server.stop()
+            logger.info("Model server stopped")
+        except Exception:
+            pass
+
+    # 4. Stop tray
+    if tray is not None:
+        try:
+            tray.stop()
+        except Exception:
+            pass
+
+    # 5. Close OSC bridge
+    try:
+        bridge.close()
+    except Exception:
+        pass
+
     logger.info("AudioShuttle stopped")

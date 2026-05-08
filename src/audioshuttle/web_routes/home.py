@@ -79,6 +79,25 @@ async def home_page(request: Request):
     errors = err_log.get_recent(50)
     history = list(_command_history)[-20:]
 
+    # Check STT availability
+    stt_available = False
+    try:
+        from audioshuttle.stt import STTEngine
+
+        stt_available = STTEngine().available
+    except Exception:
+        pass
+
+    # Check voice mode
+    voice_mode = "disabled"
+    voice_pipeline = getattr(app.state, "voice_pipeline", None)
+    if voice_pipeline is not None:
+        voice_mode = "web"  # at minimum, browser recording works
+        # Check if global hotkey is active
+        voice_hotkey = getattr(app.state, "voice_hotkey", None)
+        if voice_hotkey is not None and hasattr(voice_hotkey, "is_running") and voice_hotkey.is_running:
+            voice_mode = "hotkey"
+
     return app.state.templates.TemplateResponse(
         request,
         "home.html",
@@ -86,6 +105,8 @@ async def home_page(request: Request):
             "status": status,
             "errors": errors,
             "history": history,
+            "stt_available": stt_available,
+            "voice_mode": voice_mode,
         },
     )
 
