@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # DAW selection
     daw_type: str = "reaper"  # "reaper" or "ardour"
 
+    # STT (speech-to-text) — optional, requires audioshuttle[stt]
+    stt_model_size: str = "base"  # tiny/base/small/medium/large-v3
+    stt_device: str = "cpu"  # cpu or cuda (default cpu — no GPU contention)
+    stt_compute_type: str = "int8"  # int8 for CPU, float16 for GPU
+
     # Web UI behavior
     auto_open_browser: bool = True  # auto-open browser on startup
     tray_enabled: bool = True  # show system tray icon

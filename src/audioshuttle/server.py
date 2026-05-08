@@ -503,4 +503,36 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             "error": cmd_result.error,
         }
 
+    @mcp.tool()
+    def transcribe_audio(audio_path: str) -> str:
+        """Transcribe an audio file to text using Whisper.
+
+        Requires audioshuttle[stt] optional dependency (faster-whisper).
+        Returns transcribed text that can be used as a voice command.
+
+        Args:
+            audio_path: Path to audio file (WAV, MP3, OGG, WEBM, etc.)
+        """
+        from audioshuttle.stt import STTEngine
+
+        engine = STTEngine(
+            model_size=settings.stt_model_size,
+            device=settings.stt_device,
+            compute_type=settings.stt_compute_type,
+        )
+
+        if not engine.available:
+            return (
+                "Error: faster-whisper not installed. "
+                "Install with: pip install audioshuttle[stt]"
+            )
+
+        try:
+            text = engine.transcribe(audio_path)
+            return text
+        except FileNotFoundError as e:
+            return f"Error: {e}"
+        except RuntimeError as e:
+            return f"Error: {e}"
+
     return mcp
