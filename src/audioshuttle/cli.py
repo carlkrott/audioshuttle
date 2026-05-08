@@ -45,11 +45,15 @@ def main() -> None:
     from audioshuttle.launcher import launch
 
     settings = Settings()
+    # stdio mode: never auto-open browser (MCP server is called by another program)
+    no_browser = args.no_browser or args.transport == "stdio"
+    no_tray = args.no_tray or args.transport == "stdio"
+
     launch(
         settings,
         transport=args.transport,
-        no_browser=args.no_browser,
-        no_tray=args.no_tray,
+        no_browser=no_browser,
+        no_tray=no_tray,
         host=args.host,
         port=args.port,
     )
