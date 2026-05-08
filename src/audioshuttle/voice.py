@@ -10,6 +10,69 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
+    """Execute a translated tool call on the OSC bridge.
+
+    Maps tool names from TranslationResult to bridge method calls.
+    Returns the CommandResult from the bridge, or None for discovery tools.
+    """
+    action = args.get("action", "")
+    tool_map = {
+        "transport_control": lambda: (
+            bridge.transport_play() if action == "play"
+            else bridge.transport_stop() if action == "stop"
+            else bridge.transport_record() if action == "record"
+            else bridge.transport_pause() if action == "pause"
+            else None
+        ),
+        "transport_seek": lambda: bridge.transport_seek(
+            float(args.get("position_seconds", 0))
+        ),
+        "set_track_volume": lambda: bridge.set_track_volume(
+            int(args["track"]), float(args["volume"])
+        ),
+        "set_track_mute": lambda: bridge.set_track_mute(
+            int(args["track"]), bool(args["mute"])
+        ),
+        "set_track_solo": lambda: bridge.set_track_solo(
+            int(args["track"]), bool(args["solo"])
+        ),
+        "set_track_pan": lambda: bridge.set_track_pan(
+            int(args["track"]), float(args["pan"])
+        ),
+        "set_master_volume": lambda: bridge.set_master_volume(
+            float(args["volume"])
+        ),
+        "set_master_pan": lambda: bridge.set_master_pan(
+            float(args["pan"])
+        ),
+        "set_fx_param": lambda: bridge.set_fx_param(
+            int(args["track"]), int(args["fx"]),
+            int(args["param"]), float(args["value"]),
+        ),
+        "fx_bypass": lambda: bridge.fx_bypass(
+            int(args["track"]), int(args["fx"]), bool(args["bypass"]),
+        ),
+        "trigger_action": lambda: bridge.trigger_action(
+            int(args["command_id"])
+        ),
+        "set_track_arm": lambda: bridge.set_track_recarm(
+            int(args["track"]), bool(args["arm"]),
+        ),
+        "toggle_repeat": lambda: bridge.toggle_repeat(),
+        "toggle_metronome": lambda: bridge.toggle_metronome(),
+    }
+
+    # Discovery tools — no bridge call needed
+    if tool in ("list_tracks", "get_transport", "get_daw_state", "get_track_count"):
+        return None
+
+    fn = tool_map.get(tool)
+    if fn:
+        return fn()
+    return None
+
+
 class VoicePipeline:
     """End-to-end voice command pipeline.
 
@@ -111,7 +174,17 @@ class VoicePipeline:
             if self._translator:
                 try:
                     from audioshuttle.models import DAWState
-                    command = self._translator.translate(final_text, DAWState())
+                    result = self._translator.translate(final_text, DAWState())
+                    if result.success:
+                        command = {"tool": result.tool, "args": result.args, "method": result.method}
+                    else:
+                        return {
+                            "transcription": raw_text,
+                            "formatted": formatted,
+                            "command": None,
+                            "success": False,
+                            "error": f"Could not understand: {result.error}",
+                        }
                 except Exception as e:
                     return {
                         "transcription": raw_text,
@@ -124,7 +197,7 @@ class VoicePipeline:
             # Step 4: Execute via bridge
             if command and self._bridge:
                 try:
-                    result = self._bridge.execute_command(command)
+                    _execute_tool(self._bridge, command["tool"], command["args"])
                     return {
                         "transcription": raw_text,
                         "formatted": formatted,
@@ -171,7 +244,10 @@ class VoicePipeline:
             "Output ONLY the cleaned text, nothing else.\n\n"
             f'Raw: "{raw_text}"'
         )
-        result = self._model_server.chat(prompt)
+        result = self._model_server.chat(
+            [{"role": "user", "content": prompt}],
+            max_tokens=256,
+        )
         if result:
             return result.strip()
         return raw_text
@@ -199,7 +275,17 @@ class VoicePipeline:
         if self._translator:
             try:
                 from audioshuttle.models import DAWState
-                command = self._translator.translate(final_text, DAWState())
+                result = self._translator.translate(final_text, DAWState())
+                if result.success:
+                    command = {"tool": result.tool, "args": result.args, "method": result.method}
+                else:
+                    return {
+                        "transcription": text,
+                        "formatted": formatted,
+                        "command": None,
+                        "success": False,
+                        "error": f"Could not understand: {result.error}",
+                    }
             except Exception as e:
                 return {
                     "transcription": text,
@@ -212,7 +298,7 @@ class VoicePipeline:
         # Step 3: Execute
         if command and self._bridge:
             try:
-                self._bridge.execute_command(command)
+                _execute_tool(self._bridge, command["tool"], command["args"])
                 return {
                     "transcription": text,
                     "formatted": formatted,

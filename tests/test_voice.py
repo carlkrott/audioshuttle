@@ -40,14 +40,17 @@ class TestVoicePipeline:
 
     def test_process_audio_basic(self):
         """Audio → STT → translate → execute."""
+        from audioshuttle.models import TranslationResult
+
         stt = MagicMock()
         stt.transcribe.return_value = "play"
 
         translator = MagicMock()
-        translator.translate.return_value = {"action": "play"}
+        translator.translate.return_value = TranslationResult(
+            success=True, tool="transport_control", args={"action": "play"}, method="model"
+        )
 
         bridge = MagicMock()
-        bridge.execute_command.return_value = True
 
         pipeline = self._make_pipeline(
             stt_engine=stt, bridge=bridge, translator=translator
@@ -58,7 +61,7 @@ class TestVoicePipeline:
 
         assert result["success"] is True
         assert result["transcription"] == "play"
-        assert result["command"] == {"action": "play"}
+        assert result["command"]["tool"] == "transport_control"
         stt.transcribe.assert_called_once()
 
     def test_process_audio_no_stt(self):
@@ -103,11 +106,15 @@ class TestVoicePipeline:
 
     def test_process_audio_cleanup_false_no_model(self):
         """Cleanup=False works without model server."""
+        from audioshuttle.models import TranslationResult
+
         stt = MagicMock()
         stt.transcribe.return_value = "play"
 
         translator = MagicMock()
-        translator.translate.return_value = {"action": "play"}
+        translator.translate.return_value = TranslationResult(
+            success=True, tool="transport_control", args={"action": "play"}, method="fallback"
+        )
 
         pipeline = self._make_pipeline(
             stt_engine=stt, translator=translator, model_server=None
@@ -157,18 +164,21 @@ class TestVoicePipeline:
 
     def test_process_text_only(self):
         """Text-only pipeline skips STT."""
+        from audioshuttle.models import TranslationResult
+
         translator = MagicMock()
-        translator.translate.return_value = {"action": "stop"}
+        translator.translate.return_value = TranslationResult(
+            success=True, tool="transport_control", args={"action": "stop"}, method="fallback"
+        )
 
         bridge = MagicMock()
-        bridge.execute_command.return_value = True
 
         pipeline = self._make_pipeline(bridge=bridge, translator=translator)
         result = pipeline.process_text_only("stop", cleanup=False)
 
         assert result["success"] is True
         assert result["transcription"] == "stop"
-        assert result["command"] == {"action": "stop"}
+        assert result["command"]["tool"] == "transport_control"
 
     def test_process_text_only_empty(self):
         """Empty text returns error."""
@@ -191,14 +201,18 @@ class TestVoicePipeline:
 
     def test_process_audio_bridge_fails(self):
         """Bridge execution failure returns error."""
+        from audioshuttle.models import TranslationResult
+
         stt = MagicMock()
         stt.transcribe.return_value = "play"
 
         translator = MagicMock()
-        translator.translate.return_value = {"action": "play"}
+        translator.translate.return_value = TranslationResult(
+            success=True, tool="transport_control", args={"action": "play"}, method="model"
+        )
 
         bridge = MagicMock()
-        bridge.execute_command.side_effect = RuntimeError("OSC error")
+        bridge.transport_play.side_effect = RuntimeError("OSC error")
 
         pipeline = self._make_pipeline(
             stt_engine=stt, bridge=bridge, translator=translator

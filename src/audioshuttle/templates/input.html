@@ -115,38 +115,34 @@ let mediaRecorder = null;
 let audioChunks = [];
 let selectedMicId = null;
 
-// Enumerate microphones on page load
+// Don't auto-enumerate — requires user gesture for permission
+// Instead, enumerate after the user clicks Test or Record
+
 async function enumMics() {
     const statusEl = document.getElementById('mic-status');
     const selectEl = document.getElementById('mic-select');
     try {
-        // Try to get mic access first (needed to see device labels)
-        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        tempStream.getTracks().forEach(t => t.stop());
-
         const devices = await navigator.mediaDevices.enumerateDevices();
         const mics = devices.filter(d => d.kind === 'audioinput');
-        selectEl.innerHTML = '<option value="">Default</option>';
+        if (mics.length === 0) {
+            selectEl.innerHTML = '<option value="">No devices found</option>';
+            statusEl.textContent = 'No audio inputs detected by browser';
+            statusEl.style.color = '#fbbc04';
+            return;
+        }
+        selectEl.innerHTML = '';
         mics.forEach((m, i) => {
             const opt = document.createElement('option');
             opt.value = m.deviceId;
             opt.textContent = m.label || `Microphone ${i + 1}`;
-            select.appendChild(opt);
+            selectEl.appendChild(opt);
         });
-        statusEl.textContent = `${mics.length} mic(s) found`;
+        statusEl.textContent = `${mics.length} mic(s) available`;
         statusEl.style.color = '#0f9b58';
     } catch (err) {
-        selectEl.innerHTML = '<option value="">No devices</option>';
-        if (err.name === 'NotAllowedError') {
-            statusEl.innerHTML = '❌ Mic blocked — click the lock/icon in your browser address bar → allow Microphone';
-            statusEl.style.color = '#ea4335';
-        } else if (err.name === 'NotFoundError') {
-            statusEl.innerHTML = '❌ No audio input found — is PipeWire/PulseAudio running? <code>systemctl --user start pipewire</code>';
-            statusEl.style.color = '#ea4335';
-        } else {
-            statusEl.textContent = '❌ ' + err.message;
-            statusEl.style.color = '#ea4335';
-        }
+        selectEl.innerHTML = '<option value="">Error</option>';
+        statusEl.textContent = 'Could not enumerate devices';
+        statusEl.style.color = '#ea4335';
     }
 }
 
@@ -154,7 +150,7 @@ function selectMic() {
     selectedMicId = document.getElementById('mic-select').value || null;
 }
 
-// Test mic — shows live level meter for 3 seconds
+// Test mic — shows live level meter for 3 seconds, then enumerates
 async function testMic() {
     const statusEl = document.getElementById('mic-status');
     const meterEl = document.getElementById('mic-meter');
@@ -165,6 +161,10 @@ async function testMic() {
             ? { audio: { deviceId: { exact: selectedMicId } } }
             : { audio: true };
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+        // Permission granted — enumerate devices now (labels available)
+        await enumMics();
+
         const ctx = new AudioContext();
         const source = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
@@ -196,17 +196,18 @@ async function testMic() {
         }
         update();
     } catch (err) {
-        statusEl.textContent = err.name === 'NotAllowedError'
-            ? '❌ Permission denied — allow mic in browser settings'
-            : err.name === 'NotFoundError'
-            ? '❌ No microphone detected — check connections'
-            : '❌ ' + err.message;
-        statusEl.style.color = '#ea4335';
+        if (err.name === 'NotAllowedError') {
+            statusEl.innerHTML = '❌ Permission denied — click the 🔒 in your browser address bar → Site settings → Microphone → Allow';
+            statusEl.style.color = '#ea4335';
+        } else if (err.name === 'NotFoundError') {
+            statusEl.innerHTML = '❌ No microphone detected — check connections';
+            statusEl.style.color = '#ea4335';
+        } else {
+            statusEl.textContent = '❌ ' + err.message;
+            statusEl.style.color = '#ea4335';
+        }
     }
 }
-
-// Enumerate on load
-enumMics();
 
 async function startRecording() {
     try {

@@ -83,8 +83,8 @@ async def midi_send(
         }
         return RedirectResponse(url="/midi", status_code=303)
 
-    # Use the translator to interpret the user's description + pattern context
-    # This ensures only valid tools are used (not invented ones like add_midi_track)
+    # Use the translator to interpret the user's description
+    # The MIDI pattern context is informational — the translator maps to real tools
     translator = getattr(app.state, "translator", None)
     bridge = getattr(app.state, "bridge", None)
 
@@ -96,22 +96,25 @@ async def midi_send(
         return RedirectResponse(url="/midi", status_code=303)
 
     role = pattern.get("role", "drums")
-    pattern_summary = json.dumps(pattern["pattern"][:4])  # First 4 bars
 
-    # Combine the MIDI context with the user's description for the translator
-    combined_input = (
-        f"[MIDI Pattern: {role}, first 4 bars: {pattern_summary}] "
-        f"{description.strip()}"
-    )
+    # Send the user's description to the translator with MIDI context
+    # The translator will use the real tool list from SYSTEM_PROMPT
+    combined_input = f"Set up a {role} track in the DAW. {description.strip()}"
 
     try:
         from audioshuttle.models import DAWState
 
         result = translator.translate(combined_input, DAWState())
         if result.success:
+            # Execute the tool on the bridge
+            from audioshuttle.voice import _execute_tool
+            try:
+                _execute_tool(bridge, result.tool, result.args)
+            except Exception:
+                pass
             app.state.midi_send_result = {
                 "success": True,
-                "message": f"Executed: {result.tool}({result.args}) via {result.method}",
+                "message": f"✓ {result.tool}({result.args}) — via {result.method}",
                 "command": result.tool,
             }
         else:

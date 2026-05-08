@@ -85,15 +85,23 @@ async def save_system_prompt(request: Request, system_prompt: str = Form(...)):
     from audioshuttle.error_log import error_log
     from audioshuttle.translator import update_system_prompt
 
+    # Don't save placeholder or empty prompts
+    stripped = system_prompt.strip()
+    if not stripped or stripped.lower() in ("my custom prompt", "placeholder"):
+        # Delete the file so the default is used
+        if _PROMPT_FILE.exists():
+            _PROMPT_FILE.unlink()
+        return RedirectResponse(url="/input?saved=1", status_code=303)
+
     try:
         # Ensure directory exists
         _PROMPT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _PROMPT_FILE.write_text(system_prompt)
+        _PROMPT_FILE.write_text(stripped)
 
         # Update in-memory prompt
-        update_system_prompt(system_prompt)
+        update_system_prompt(stripped)
 
-        logger.info("System prompt updated (%d chars)", len(system_prompt))
+        logger.info("System prompt updated (%d chars)", len(stripped))
     except Exception as e:
         error_log.add(f"Failed to save system prompt: {e}")
         logger.error("Failed to save system prompt: %s", e)
