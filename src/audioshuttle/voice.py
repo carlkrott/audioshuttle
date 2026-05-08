@@ -110,7 +110,8 @@ class VoicePipeline:
             command = None
             if self._translator:
                 try:
-                    command = self._translator.translate(final_text)
+                    from audioshuttle.models import DAWState
+                    command = self._translator.translate(final_text, DAWState())
                 except Exception as e:
                     return {
                         "transcription": raw_text,
@@ -197,7 +198,8 @@ class VoicePipeline:
         command = None
         if self._translator:
             try:
-                command = self._translator.translate(final_text)
+                from audioshuttle.models import DAWState
+                command = self._translator.translate(final_text, DAWState())
             except Exception as e:
                 return {
                     "transcription": text,

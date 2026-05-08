@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     reaper_feedback_port: int = 9000  # Reaper sends feedback here
 
     # Embedded model (domain expert)
-    model_api_url: str = "http://localhost:8092/v1/chat/completions"
+    model_api_url: str = "http://localhost:8093/v1/chat/completions"
     model_name: str = "gemma-4-e2b"
     model_enabled: bool = True
     model_binary: str = "/usr/bin/llama-server"

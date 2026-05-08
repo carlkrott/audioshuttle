@@ -34,11 +34,11 @@ class TestModelServerConfig:
 
     def test_extract_port_default(self):
         ms = ModelServer()
-        assert ms._extract_port() == 8092
+        assert ms._extract_port() == 8093
 
     def test_base_url_strips_chat_path(self):
         ms = ModelServer()
-        assert ms.base_url == "http://localhost:8092"
+        assert ms.base_url == "http://localhost:8093"
 
 
 class TestModelServerLifecycle:
@@ -58,7 +58,7 @@ class TestModelServerLifecycle:
 
     def test_repr_shows_url(self):
         ms = ModelServer()
-        assert "localhost:8092" in repr(ms)
+        assert "localhost:8093" in repr(ms)
 
 
 class TestModelServerHealthCheck:

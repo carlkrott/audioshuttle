@@ -56,9 +56,11 @@ async def home_page(request: Request):
         else:
             model_state = "loading"
 
-    # Determine DAW connection
+    # Determine DAW connection — probe Reaper if not yet seen
     daw_connected = False
-    if bridge is not None and hasattr(bridge, "is_connected"):
+    if bridge is not None:
+        if not bridge.is_connected and hasattr(bridge, "probe"):
+            bridge.probe()
         daw_connected = bridge.is_connected
 
     # Get DAW detection info
@@ -140,7 +142,10 @@ async def replay_command(request: Request, cmd: str = ""):
     bridge = app.state.bridge
 
     if cmd and translator and bridge:
-        result = translator.translate(cmd)
+        from audioshuttle.models import DAWState
+
+        daw_state = DAWState()
+        result = translator.translate(cmd, daw_state)
         if result.success and result.tool:
             record_command(cmd, result.tool, True)
         else:

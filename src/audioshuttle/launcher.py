@@ -64,7 +64,9 @@ def launch(
     import subprocess as _sp
     import time as _time
 
-    for cleanup_port in [web_port, settings.reaper_port + 92]:  # 8765, 8092
+    # Only clean up the web port — the model server is managed externally
+    # (e.g., launched separately on its own port, not spawned by AudioShuttle)
+    for cleanup_port in [web_port]:
         try:
             result = _sp.run(
                 ["fuser", f"{cleanup_port}/tcp"], capture_output=True, text=True, timeout=5,

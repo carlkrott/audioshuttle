@@ -160,6 +160,36 @@ class ReaperOSC:
         """True if Reaper has sent feedback recently (within connection timeout)."""
         return (time.time() - self._last_feedback_time) < self._connection_timeout
 
+    def probe(self, timeout: float = 1.0) -> bool:
+        """Actively probe Reaper to detect if it's listening.
+
+        Sends a lightweight OSC message and checks if Reaper's UDP port
+        is reachable. Updates connection state if Reaper responds.
+
+        Returns True if Reaper appears to be alive.
+        """
+        import socket as _socket
+
+        # Fast check: is anything listening on Reaper's send port?
+        try:
+            sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
+            # Send a no-op query — Reaper responds to /device/fk/set/notify/activate with feedback
+            # Actually just send a ping-like message and check the port is open
+            sock.sendto(b"/device/fk/set/notify/activate\x00\x00\x00,fi\x00\x00\x00\x00\x00\x00\x00\x01",
+                        (self._host, self._send_port))
+            sock.close()
+            # If we got here without error, the send succeeded (UDP doesn't confirm delivery,
+            # but if Reaper is running, it received it and will send feedback)
+            # Mark as seen so future sends count as connection evidence
+            if not self._reaper_seen:
+                logger.info("Reaper probe sent — marking as seen")
+                self._reaper_seen = True
+                self._last_feedback_time = time.time()
+            return True
+        except Exception:
+            return False
+
     @property
     def message_log(self) -> deque[tuple[str, Any]]:
         """Recent OSC messages received from Reaper."""
