@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .midi-controls {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+    }
+    .midi-controls select,
+    .midi-controls input {
+        background: #0d1117;
+        border: 1px solid #30363d;
+        color: #eee;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 13px;
+    }
+    .midi-controls select:focus,
+    .midi-controls input:focus {
+        outline: none;
+        border-color: #0f9b58;
+    }
+    .btn-randomize {
+        background: #0f9b58;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: opacity 0.2s;
+    }
+    .btn-randomize:hover { opacity: 0.85; }
+
+    /* Step sequencer grid */
+    .sequencer-grid {
+        display: grid;
+        gap: 2px;
+        margin-bottom: 20px;
+        overflow-x: auto;
+        padding: 8px;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+    }
+    .seq-cell {
+        width: 24px;
+        height: 24px;
+        border-radius: 3px;
+        transition: opacity 0.15s;
+    }
+    .seq-cell.off { background: #21262d; }
+    .seq-cell.low { background: #1a5c3a; opacity: 0.7; }
+    .seq-cell.mid { background: #0f9b58; }
+    .seq-cell.high { background: #4caf50; }
+
+    /* Bar labels */
+    .bar-label {
+        color: #555;
+        font-size: 10px;
+        text-align: center;
+    }
+
+    /* Send section */
+    .send-section {
+        margin-top: 16px;
+        padding: 16px;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+    }
+    .send-section textarea {
+        width: 100%;
+        background: #161b22;
+        border: 1px solid #30363d;
+        color: #eee;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 13px;
+        resize: vertical;
+        min-height: 50px;
+        margin-bottom: 8px;
+    }
+    .send-section textarea:focus { outline: none; border-color: #0f9b58; }
+    .btn-send {
+        background: #58a6ff;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+    }
+    .btn-send:hover { opacity: 0.85; }
+
+    .result-msg {
+        margin-top: 10px;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 13px;
+    }
+    .result-msg.success { background: #0f9b5822; color: #0f9b58; }
+    .result-msg.error { background: #ea433522; color: #ea4335; }
+</style>
+
+<h2 class="section-header" style="border-left-color: #58a6ff;">MIDI Pattern Generator</h2>
+
+<div class="midi-controls">
+    <form method="post" action="/midi/generate" id="generate-form" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:13px;color:#888;">Role:</label>
+        <select name="role">
+            <option value="drums">Drums</option>
+            <option value="rhythm">Rhythm</option>
+            <option value="lead">Lead</option>
+            <option value="melody">Melody</option>
+        </select>
+        <label style="font-size:13px;color:#888;">Seed:</label>
+        <input type="text" name="seed" placeholder="Random" style="width:80px;">
+        <button type="submit" class="btn-randomize">🎲 Randomize</button>
+    </form>
+</div>
+
+{% if pattern %}
+<!-- Step Sequencer Grid -->
+<p style="font-size:12px;color:#888;margin-bottom:6px;">
+    {{ pattern.role|title }} · {{ pattern.bars }} bars · {{ pattern.steps_per_bar }} steps/bar · seed: {{ pattern.seed }}
+</p>
+<div class="sequencer-grid" style="grid-template-columns: repeat({{ pattern.bars }}, auto);">
+    {% for bar in pattern.pattern %}
+        {% for step in bar %}
+            {% if step == 0 %}
+            <div class="seq-cell off"></div>
+            {% elif step < 65 %}
+            <div class="seq-cell low" title="vel: {{ step }}"></div>
+            {% elif step < 100 %}
+            <div class="seq-cell mid" title="vel: {{ step }}"></div>
+            {% else %}
+            <div class="seq-cell high" title="vel: {{ step }}"></div>
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+</div>
+
+<!-- Send to Track -->
+<div class="send-section">
+    <form method="post" action="/midi/send">
+        <p style="font-size:13px;color:#aaa;margin-bottom:8px;">
+            Where do you want this? Describe the instrument, key, and tempo to add it.
+        </p>
+        <textarea name="description" placeholder="e.g., Add as a drum track at 120 BPM in C minor"></textarea>
+        <button type="submit" class="btn-send">Send to E2B</button>
+    </form>
+    {% if send_result %}
+    <div class="result-msg {{ 'success' if send_result.success else 'error' }}">
+        {{ send_result.message }}
+    </div>
+    {% endif %}
+</div>
+
+{% else %}
+<p style="color:#555;font-style:italic;">Select a role and click Randomize to generate a pattern.</p>
+{% endif %}
+{% endblock %}
