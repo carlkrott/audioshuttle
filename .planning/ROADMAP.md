@@ -46,13 +46,16 @@
 ---
 
 ### Phase 5: Voice + Demo (Day 9-12)
-**Goal:** Voice control working, Kaggle submission ready
+**Goal:** Voice control working, MIDI pattern generator, dashboard enhancements, Kaggle submission ready
 
-**Plans:** 4 plans in 4 waves
+**Plans:** 7 plans in 5 waves
 - [ ] 05-01-PLAN.md — STT engine (faster-whisper) + transcribe_audio MCP tool
-- [ ] 05-02-PLAN.md — Browser voice recording UI + voice pipeline endpoint
-- [ ] 05-03-PLAN.md — README + demo walkthrough + CI workflow
-- [ ] 05-04-PLAN.md — Polish launcher/dashboard + human E2E verification
+- [ ] 05-02-PLAN.md — Home dashboard enhancements + nav/route infrastructure for new tabs
+- [ ] 05-03-PLAN.md — MIDI pattern generator tab (16-bar grid + E2B track assignment)
+- [ ] 05-04-PLAN.md — Command log tab + track presets + state snapshot + shortcuts reference
+- [ ] 05-05-PLAN.md — Voice pipeline (Alt+Space hotkey + E2B formatting + browser recording)
+- [ ] 05-06-PLAN.md — Gemma-centric README + demo walkthrough + CI workflow
+- [ ] 05-07-PLAN.md — Launcher hardening + tray status + visual polish + human E2E verification
 
 ---
 
