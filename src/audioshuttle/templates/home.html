@@ -1,45 +1,219 @@
 {% extends "base.html" %}
 
 {% block content %}
-<h2>Status</h2>
-<div class="status-row">
-    <div class="status-item">
-        <span class="label">DAW:</span>
-        {% if status.daw_connected %}
-        <span class="badge badge-ok">{{ status.daw_name }} Connected</span>
-        {% else %}
-        <span class="badge badge-error">{{ status.daw_name }} Disconnected</span>
-        {% endif %}
+<style>
+    /* Connection pulse animation */
+    @keyframes pulse-green {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(15, 155, 88, 0.4); }
+        50% { box-shadow: 0 0 8px 4px rgba(15, 155, 88, 0.2); }
+    }
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+    .pulse-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        animation: pulse-dot 1.5s ease-in-out infinite;
+    }
+    .pulse-dot.green { background: #0f9b58; }
+    .pulse-dot.red { background: #ea4335; }
+
+    /* Status cards */
+    .status-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+    .status-card {
+        background: linear-gradient(135deg, #16213e, #1a1a2e);
+        border: 1px solid #0f3460;
+        border-radius: 8px;
+        padding: 14px;
+        transition: box-shadow 0.2s ease;
+    }
+    .status-card:hover {
+        box-shadow: 0 2px 12px rgba(15, 52, 96, 0.4);
+    }
+    .status-card .card-label {
+        font-size: 11px;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 6px;
+    }
+    .status-card .card-value {
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    /* Transport buttons */
+    .transport-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+    }
+    .transport-btn {
+        border: none;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: transform 0.1s ease, opacity 0.2s ease;
+    }
+    .transport-btn:hover { transform: scale(1.05); }
+    .transport-btn:active { transform: scale(0.95); }
+    .transport-btn.play { background: #0f9b58; color: white; }
+    .transport-btn.stop { background: #ea4335; color: white; }
+    .transport-btn.record { background: #c62828; color: white; }
+    .transport-btn.pause { background: #fbbc04; color: #1a1a2e; }
+
+    /* Command history */
+    .history-list {
+        max-height: 300px;
+        overflow-y: auto;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 12px;
+        line-height: 1.6;
+    }
+    .history-entry {
+        display: flex;
+        gap: 8px;
+        padding: 2px 4px;
+        border-radius: 3px;
+    }
+    .history-entry:hover { background: #161b22; }
+    .history-time { color: #555; min-width: 70px; }
+    .history-cmd { color: #c9d1d9; }
+    .history-cmd.success { color: #0f9b58; }
+    .history-cmd.error { color: #ea4335; }
+    .history-tool { color: #58a6ff; font-size: 11px; }
+    .history-empty { color: #555; font-style: italic; padding: 8px; }
+
+    /* Section headers */
+    .section-header {
+        font-size: 14px;
+        color: #ccc;
+        margin: 20px 0 8px;
+        padding-left: 10px;
+        border-left: 3px solid #0f9b58;
+    }
+</style>
+
+<h2 class="section-header">Status</h2>
+
+<div class="status-cards">
+    <!-- Reaper Connection -->
+    <div class="status-card">
+        <div class="card-label">Reaper</div>
+        <div class="card-value">
+            {% if status.daw_connected %}
+            <span class="pulse-dot green"></span> Connected
+            {% else %}
+            <span class="pulse-dot red"></span> Offline
+            {% endif %}
+        </div>
     </div>
-    <div class="status-item">
-        <span class="label">MCP:</span>
-        <span class="badge badge-ok">Running</span>
+
+    <!-- MCP Server -->
+    <div class="status-card">
+        <div class="card-label">MCP Server</div>
+        <div class="card-value"><span class="pulse-dot green"></span> Running</div>
     </div>
-    <div class="status-item">
-        <span class="label">Model:</span>
-        {% if status.model_state == 'running' %}
-        <span class="badge badge-ok">Loaded</span>
-        {% elif status.model_state == 'loading' %}
-        <span class="badge badge-warn">Loading</span>
-        {% else %}
-        <span class="badge badge-off">Disabled</span>
-        {% endif %}
+
+    <!-- Model -->
+    <div class="status-card">
+        <div class="card-label">AI Model</div>
+        <div class="card-value">
+            {% if status.model_state == 'running' %}
+            <span class="badge badge-ok">Gemma E2B Active</span>
+            {% elif status.model_state == 'loading' %}
+            <span class="badge badge-warn">Loading...</span>
+            {% else %}
+            <span class="badge badge-off">Disabled</span>
+            {% endif %}
+        </div>
     </div>
-    <div class="status-item">
-        <span class="label">GPU:</span>
-        <span class="badge {% if status.gpu_vram.vram_used_pct < 80 %}badge-ok{% else %}badge-warn{% endif %}">
-            {{ status.gpu_vram.vram_used_mb }} / {{ status.gpu_vram.vram_total_mb }} MB ({{ status.gpu_vram.vram_used_pct }}%)
-        </span>
+
+    <!-- Model Stats -->
+    <div class="status-card">
+        <div class="card-label">Model Stats</div>
+        <div class="card-value" style="font-size: 12px;">
+            {% if status.model_inference_ms is not none %}
+            {{ status.model_inference_ms|round(0)|int }}ms
+            {% if status.model_tokens_sec is not none %}
+            · {{ status.model_tokens_sec|round(1) }} tok/s
+            {% endif %}
+            {% else %}
+            —
+            {% endif %}
+        </div>
     </div>
-    <div class="status-item">
-        <span class="label">Detected:</span>
-        <span class="badge {% if status.detection.detected != 'none' %}badge-ok{% else %}badge-off{% endif %}">
-            {{ status.detection.detected }}
-        </span>
+
+    <!-- GPU -->
+    <div class="status-card">
+        <div class="card-label">GPU VRAM</div>
+        <div class="card-value" style="font-size: 12px;">
+            {{ status.gpu_vram.vram_used_mb }} / {{ status.gpu_vram.vram_total_mb }} MB
+        </div>
+    </div>
+
+    <!-- Detected DAW -->
+    <div class="status-card">
+        <div class="card-label">Detected</div>
+        <div class="card-value">
+            <span class="badge {% if status.detection.detected != 'none' %}badge-ok{% else %}badge-off{% endif %}">
+                {{ status.detection.detected }}
+            </span>
+        </div>
     </div>
 </div>
 
-<h2>Error Log</h2>
+<h2 class="section-header">Transport</h2>
+<div class="transport-row">
+    <form method="post" action="/transport" style="display:inline;">
+        <input type="hidden" name="action" value="play">
+        <button class="transport-btn play" type="submit">▶ Play</button>
+    </form>
+    <form method="post" action="/transport" style="display:inline;">
+        <input type="hidden" name="action" value="stop">
+        <button class="transport-btn stop" type="submit">⏹ Stop</button>
+    </form>
+    <form method="post" action="/transport" style="display:inline;">
+        <input type="hidden" name="action" value="record">
+        <button class="transport-btn record" type="submit">⏺ Record</button>
+    </form>
+    <form method="post" action="/transport" style="display:inline;">
+        <input type="hidden" name="action" value="pause">
+        <button class="transport-btn pause" type="submit">⏸ Pause</button>
+    </form>
+</div>
+
+<h2 class="section-header">Command History</h2>
+{% if history %}
+<div class="history-list">
+    {% for entry in history|reverse %}
+    <div class="history-entry">
+        <span class="history-time">{{ entry.timestamp[:19] }}</span>
+        <span class="history-cmd {{ 'success' if entry.success else 'error' }}">
+            <a href="/replay?cmd={{ entry.command|urlencode }}" style="color:inherit;text-decoration:none;">{{ entry.command }}</a>
+        </span>
+        <span class="history-tool">{{ entry.tool }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="history-empty">No commands executed yet</p>
+{% endif %}
+
+<h2 class="section-header">Error Log</h2>
 {% if errors %}
 <pre id="error-log">{% for entry in errors|reverse %}[{{ entry.timestamp[:19] }}] {{ entry.level|upper }}: {{ entry.message }}
 {% endfor %}</pre>

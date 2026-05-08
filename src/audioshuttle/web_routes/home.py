@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from collections import deque
+from typing import Any
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from audioshuttle.daw_detect import detect_daw
 from audioshuttle.gpu_monitor import get_gpu_vram
 
 router = APIRouter()
+
+# Command history stored module-level so it survives across requests
+_command_history: deque[dict[str, Any]] = deque(maxlen=100)
+
+
+def record_command(command: str, tool: str, success: bool) -> None:
+    """Record a command execution in history."""
+    from datetime import datetime, timezone
+
+    _command_history.append(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "command": command,
+            "tool": tool,
+            "success": success,
+        }
+    )
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -20,17 +40,21 @@ async def home_page(request: Request):
     model_server = app.state.model_server
     err_log = app.state.error_log
 
-    # Determine model state
+    # Determine model state + stats
+    model_state = "disabled"
+    model_loaded = False
+    model_inference_ms: float | None = None
+    model_tokens_sec: float | None = None
+
     if model_server is not None:
         if hasattr(model_server, "is_running") and model_server.is_running:
             model_state = "running"
             model_loaded = True
+            # Check for inference stats
+            model_inference_ms = getattr(model_server, "_last_inference_ms", None)
+            model_tokens_sec = getattr(model_server, "_avg_tokens_sec", None)
         else:
             model_state = "loading"
-            model_loaded = False
-    else:
-        model_state = "disabled"
-        model_loaded = False
 
     # Determine DAW connection
     daw_connected = False
@@ -43,14 +67,17 @@ async def home_page(request: Request):
     status = {
         "daw_connected": daw_connected,
         "daw_name": settings.daw_type.title(),
-        "mcp_running": True,  # if we're serving this page, MCP is running
+        "mcp_running": True,
         "model_loaded": model_loaded,
         "model_state": model_state,
+        "model_inference_ms": model_inference_ms,
+        "model_tokens_sec": model_tokens_sec,
         "gpu_vram": get_gpu_vram(card_index=1),
         "detection": detection,
     }
 
     errors = err_log.get_recent(50)
+    history = list(_command_history)[-20:]
 
     return app.state.templates.TemplateResponse(
         request,
@@ -58,5 +85,44 @@ async def home_page(request: Request):
         {
             "status": status,
             "errors": errors,
+            "history": history,
         },
     )
+
+
+@router.post("/transport", response_class=HTMLResponse)
+async def transport_control(request: Request, action: str = Form(...)):
+    """Send a transport command via OSC."""
+    app = request.app
+    bridge = app.state.bridge
+
+    if bridge is not None and hasattr(bridge, "send_command"):
+        osc_map = {
+            "play": "/play",
+            "stop": "/stop",
+            "record": "/record",
+            "pause": "/pause",
+        }
+        address = osc_map.get(action)
+        if address:
+            result = bridge.send_command(address)
+            record_command(action, address, result.success)
+
+    return RedirectResponse(url="/", status_code=303)
+
+
+@router.get("/replay", response_class=HTMLResponse)
+async def replay_command(request: Request, cmd: str = ""):
+    """Re-execute a command from history."""
+    app = request.app
+    translator = getattr(app.state, "translator", None)
+    bridge = app.state.bridge
+
+    if cmd and translator and bridge:
+        result = translator.translate(cmd)
+        if result.success and result.tool:
+            record_command(cmd, result.tool, True)
+        else:
+            record_command(cmd, "replay", False)
+
+    return RedirectResponse(url="/", status_code=303)

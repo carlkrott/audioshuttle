@@ -78,6 +78,9 @@
         <a href="/" class="{{ 'active' if request.url.path == '/' }}">Home</a>
         <a href="/input" class="{{ 'active' if request.url.path == '/input' }}">Input</a>
         <a href="/output" class="{{ 'active' if request.url.path == '/output' }}">Output</a>
+        <a href="/midi" class="{{ 'active' if request.url.path == '/midi' }}">MIDI</a>
+        <a href="/log" class="{{ 'active' if request.url.path == '/log' }}">Log</a>
+        <a href="/shortcuts" class="{{ 'active' if request.url.path == '/shortcuts' }}">Shortcuts</a>
     </nav>
     <div class="container">
         {% block content %}{% endblock %}

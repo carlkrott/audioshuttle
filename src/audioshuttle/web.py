@@ -66,4 +66,25 @@ def create_web_app(
     except ImportError:
         pass
 
+    try:
+        from audioshuttle.web_routes.midi_tab import router as midi_router
+
+        app.include_router(midi_router)
+    except ImportError:
+        pass
+
+    try:
+        from audioshuttle.web_routes.log_tab import router as log_router
+
+        app.include_router(log_router)
+    except ImportError:
+        pass
+
+    try:
+        from audioshuttle.web_routes.shortcuts import router as shortcuts_router
+
+        app.include_router(shortcuts_router)
+    except ImportError:
+        pass
+
     return app
