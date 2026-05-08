@@ -46,9 +46,9 @@ class TestVoicePipeline:
         stt.transcribe.return_value = "play"
 
         translator = MagicMock()
-        translator.translate.return_value = TranslationResult(
+        translator.translate_multi.return_value = [TranslationResult(
             success=True, tool="transport_control", args={"action": "play"}, method="model"
-        )
+        )]
 
         bridge = MagicMock()
 
@@ -112,9 +112,9 @@ class TestVoicePipeline:
         stt.transcribe.return_value = "play"
 
         translator = MagicMock()
-        translator.translate.return_value = TranslationResult(
+        translator.translate_multi.return_value = [TranslationResult(
             success=True, tool="transport_control", args={"action": "play"}, method="fallback"
-        )
+        )]
 
         pipeline = self._make_pipeline(
             stt_engine=stt, translator=translator, model_server=None
@@ -167,9 +167,9 @@ class TestVoicePipeline:
         from audioshuttle.models import TranslationResult
 
         translator = MagicMock()
-        translator.translate.return_value = TranslationResult(
+        translator.translate_multi.return_value = [TranslationResult(
             success=True, tool="transport_control", args={"action": "stop"}, method="fallback"
-        )
+        )]
 
         bridge = MagicMock()
 
@@ -191,7 +191,7 @@ class TestVoicePipeline:
     def test_process_text_only_translation_fails(self):
         """Translation failure returns error."""
         translator = MagicMock()
-        translator.translate.side_effect = RuntimeError("Model error")
+        translator.translate_multi.side_effect = RuntimeError("Model error")
 
         pipeline = self._make_pipeline(translator=translator)
         result = pipeline.process_text_only("play", cleanup=False)
@@ -207,9 +207,9 @@ class TestVoicePipeline:
         stt.transcribe.return_value = "play"
 
         translator = MagicMock()
-        translator.translate.return_value = TranslationResult(
+        translator.translate_multi.return_value = [TranslationResult(
             success=True, tool="transport_control", args={"action": "play"}, method="model"
-        )
+        )]
 
         bridge = MagicMock()
         bridge.transport_play.side_effect = RuntimeError("OSC error")

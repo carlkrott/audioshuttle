@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -61,6 +62,11 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         ),
         "toggle_repeat": lambda: bridge.toggle_repeat(),
         "toggle_metronome": lambda: bridge.toggle_metronome(),
+        "set_tempo": lambda: bridge.set_tempo(float(args["bpm"])),
+        "insert_track": lambda: bridge.insert_track(),
+        "rename_track": lambda: bridge.rename_track(
+            int(args["track"]), str(args["name"]),
+        ),
     }
 
     # Discovery tools — no bridge call needed
@@ -169,39 +175,52 @@ class VoicePipeline:
                     formatted = None
                     final_text = raw_text
 
-            # Step 3: Translate to DAW command
-            command = None
+            # Step 3: Translate to DAW command(s)
+            commands: list[dict] = []
             if self._translator:
                 try:
                     from audioshuttle.models import DAWState
-                    result = self._translator.translate(final_text, DAWState())
-                    if result.success:
-                        command = {"tool": result.tool, "args": result.args, "method": result.method}
-                    else:
-                        return {
-                            "transcription": raw_text,
-                            "formatted": formatted,
-                            "command": None,
-                            "success": False,
-                            "error": f"Could not understand: {result.error}",
-                        }
+                    results = self._translator.translate_multi(final_text, DAWState())
+                    for r in results:
+                        if r.success:
+                            commands.append({
+                                "tool": r.tool,
+                                "args": r.args,
+                                "method": r.method,
+                                "delay_ms": r.delay_ms,
+                            })
+                        else:
+                            return {
+                                "transcription": raw_text,
+                                "formatted": formatted,
+                                "commands": commands or None,
+                                "command": commands[0] if commands else None,
+                                "success": False,
+                                "error": f"Could not understand: {r.error}",
+                            }
                 except Exception as e:
                     return {
                         "transcription": raw_text,
                         "formatted": formatted,
+                        "commands": None,
                         "command": None,
                         "success": False,
                         "error": f"Translation failed: {e}",
                     }
 
-            # Step 4: Execute via bridge
-            if command and self._bridge:
+            # Step 4: Execute command chain via bridge
+            if commands and self._bridge:
                 try:
-                    _execute_tool(self._bridge, command["tool"], command["args"])
+                    for i, cmd in enumerate(commands):
+                        # Apply delay before this command (except the first)
+                        if i > 0 and cmd.get("delay_ms", 0) > 0:
+                            await asyncio.sleep(cmd["delay_ms"] / 1000.0)
+                        _execute_tool(self._bridge, cmd["tool"], cmd["args"])
                     return {
                         "transcription": raw_text,
                         "formatted": formatted,
-                        "command": command,
+                        "commands": commands,
+                        "command": commands[0],  # First command for backwards compat
                         "success": True,
                         "error": None,
                     }
@@ -209,7 +228,8 @@ class VoicePipeline:
                     return {
                         "transcription": raw_text,
                         "formatted": formatted,
-                        "command": command,
+                        "commands": commands,
+                        "command": commands[0] if commands else None,
                         "success": False,
                         "error": f"Execution failed: {e}",
                     }
@@ -218,7 +238,8 @@ class VoicePipeline:
             return {
                 "transcription": raw_text,
                 "formatted": formatted,
-                "command": command,
+                "commands": commands or None,
+                "command": commands[0] if commands else None,
                 "success": True,
                 "error": None,
             }
@@ -290,6 +311,7 @@ class VoicePipeline:
             return {
                 "transcription": text,
                 "formatted": None,
+                "commands": None,
                 "command": None,
                 "success": False,
                 "error": "Empty text",
@@ -300,38 +322,48 @@ class VoicePipeline:
         final_text = text
 
         # Step 2: Translate
-        command = None
+        commands: list[dict] = []
         if self._translator:
             try:
                 from audioshuttle.models import DAWState
-                result = self._translator.translate(final_text, DAWState())
-                if result.success:
-                    command = {"tool": result.tool, "args": result.args, "method": result.method}
-                else:
-                    return {
-                        "transcription": text,
-                        "formatted": formatted,
-                        "command": None,
-                        "success": False,
-                        "error": f"Could not understand: {result.error}",
-                    }
+                results = self._translator.translate_multi(final_text, DAWState())
+                for r in results:
+                    if r.success:
+                        commands.append({
+                            "tool": r.tool,
+                            "args": r.args,
+                            "method": r.method,
+                            "delay_ms": r.delay_ms,
+                        })
+                    else:
+                        return {
+                            "transcription": text,
+                            "formatted": formatted,
+                            "commands": commands or None,
+                            "command": commands[0] if commands else None,
+                            "success": False,
+                            "error": f"Could not understand: {r.error}",
+                        }
             except Exception as e:
                 return {
                     "transcription": text,
                     "formatted": formatted,
+                    "commands": None,
                     "command": None,
                     "success": False,
                     "error": f"Translation failed: {e}",
                 }
 
-        # Step 3: Execute
-        if command and self._bridge:
+        # Step 3: Execute (synchronous — no delays in text-only mode)
+        if commands and self._bridge:
             try:
-                _execute_tool(self._bridge, command["tool"], command["args"])
+                for cmd in commands:
+                    _execute_tool(self._bridge, cmd["tool"], cmd["args"])
                 return {
                     "transcription": text,
                     "formatted": formatted,
-                    "command": command,
+                    "commands": commands,
+                    "command": commands[0],
                     "success": True,
                     "error": None,
                 }
@@ -339,7 +371,8 @@ class VoicePipeline:
                 return {
                     "transcription": text,
                     "formatted": formatted,
-                    "command": command,
+                    "commands": commands,
+                    "command": commands[0] if commands else None,
                     "success": False,
                     "error": f"Execution failed: {e}",
                 }
@@ -347,7 +380,8 @@ class VoicePipeline:
         return {
             "transcription": text,
             "formatted": formatted,
-            "command": command,
+            "commands": commands or None,
+            "command": commands[0] if commands else None,
             "success": True,
             "error": None,
         }

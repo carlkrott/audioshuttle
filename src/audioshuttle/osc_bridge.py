@@ -69,6 +69,7 @@ class ReaperOSC:
             r"^/rewind$",
             r"^/forward$",
             r"^/time$",
+            r"^/bpm$",
             r"^/track/\d+/volume$",
             r"^/track/\d+/mute$",
             r"^/track/\d+/solo$",
@@ -462,7 +463,42 @@ class ReaperOSC:
             )
         return self.send_command("/action", command_id)
 
-    # ── Track arm ───────────────────────────────────────────────
+    # ── Tempo and track management ──────────────────────────────
+
+    def set_tempo(self, bpm: float) -> CommandResult:
+        """Set the project tempo in BPM.
+
+        Args:
+            bpm: Tempo in BPM (typically 20-300).
+        """
+        if bpm < 20 or bpm > 300:
+            return CommandResult(
+                success=False,
+                address="/bpm",
+                error=f"BPM must be 20-300, got {bpm}",
+            )
+        return self.send_command("/bpm", bpm)
+
+    def insert_track(self) -> CommandResult:
+        """Insert a new track in Reaper (action 40001)."""
+        return self.send_command("/action", 40001)
+
+    def rename_track(self, track: int, name: str) -> CommandResult:
+        """Rename a track.
+
+        Args:
+            track: Track number (>= 1).
+            name: New track name.
+        """
+        if track < 1:
+            return CommandResult(
+                success=False,
+                address=f"/track/{track}/name",
+                error=f"Track must be >= 1, got {track}",
+            )
+        return self.send_command(f"/track/{track}/name", name)
+
+    # ── Track arm ────────────────────────────────────────────────
 
     def set_track_recarm(self, track: int, arm: bool) -> CommandResult:
         """Arm or disarm a track for recording.

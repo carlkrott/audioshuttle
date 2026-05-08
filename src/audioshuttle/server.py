@@ -469,6 +469,11 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             ),
             "toggle_repeat": lambda: bridge.toggle_repeat(),
             "toggle_metronome": lambda: bridge.toggle_metronome(),
+            "set_tempo": lambda: bridge.set_tempo(float(tool_args["bpm"])),
+            "insert_track": lambda: bridge.insert_track(),
+            "rename_track": lambda: bridge.rename_track(
+                int(tool_args["track"]), str(tool_args["name"]),
+            ),
         }
 
         # Discovery tools (no bridge method to call, just return state)

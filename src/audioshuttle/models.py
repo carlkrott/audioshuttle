@@ -90,4 +90,5 @@ class TranslationResult(BaseModel):
     error: Optional[str] = None
     raw_response: Optional[str] = None
     method: str = ""  # "model" or "fallback"
+    delay_ms: int = 0  # Delay before executing this command (for sequencing)
     model_config = {"populate_by_name": True}

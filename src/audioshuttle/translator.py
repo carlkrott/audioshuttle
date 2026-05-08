@@ -34,14 +34,31 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "set_track_arm": {"track": int, "arm": bool},
     "toggle_repeat": {},
     "toggle_metronome": {},
+    "set_tempo": {"bpm": float},
+    "insert_track": {},
+    "rename_track": {"track": int, "name": str},
 }
 
 SYSTEM_PROMPT = """You translate natural language DAW commands into structured JSON tool calls.
 
-Output ONLY a JSON object: {"tool": "<tool_name>", "args": {<key>: <value>}}
+You can output a SINGLE command or MULTIPLE commands in sequence.
+For multiple commands, output a JSON array. For a single command, output a JSON object.
+
+Single command format:
+{"tool": "<tool_name>", "args": {<key>: <value>}}
+
+Multiple commands format (use when the user's request involves sequential actions):
+[
+  {"tool": "<tool_name>", "args": {<key>: <value>}, "delay_ms": 0},
+  {"tool": "<tool_name>", "args": {<key>: <value>}, "delay_ms": 1000}
+]
+
+The "delay_ms" field is optional — use it when commands need timing gaps
+(e.g., "play for a few seconds then stop" → play with 3000ms delay before stop).
 
 Available tools:
 - transport_control(action: "play"|"stop"|"record"|"pause")
+- transport_seek(position_seconds: float)
 - set_track_volume(track: int, volume: float 0.0-1.0)
 - set_track_mute(track: int, mute: bool)
 - set_track_solo(track: int, solo: bool)
@@ -58,13 +75,20 @@ Available tools:
 - get_transport()
 - get_daw_state()
 - get_track_count()
+- set_tempo(bpm: float) — set project tempo in BPM
+- insert_track() — add a new track to the project
+- rename_track(track: int, name: str) — rename a track
 
 Rules:
 - Match track NAMES to find track NUMBER from the DAW state
 - "mute X" means mute=true, "unmute X" means mute=false
 - Volume: "turn up/increase" ≈ 0.85, "turn down/decrease" ≈ 0.5, "normal" ≈ 0.75
+- "down by N dB" ≈ subtract N*0.01 from current volume (rough approximation)
+- "up by N dB" ≈ add N*0.01 to current volume
 - Track numbers start at 1
 - FX and parameter indices are 0-based
+- Use multiple commands when the user says sequential things like "play then stop" or "mute drums then unmute bass"
+- Estimate delay_ms from natural language: "a few seconds" ≈ 3000, "then" ≈ 500, "after a moment" ≈ 1000
 """
 
 # Immutable original — used by reset endpoint
@@ -84,13 +108,26 @@ class IntentTranslator:
         self._model_server = model_server
 
     def translate(self, user_input: str, daw_state: DAWState) -> TranslationResult:
-        """Translate a natural language command to a tool call.
+        """Translate a natural language command to a single tool call.
 
-        Tries model-based translation first, falls back to rule-based.
+        For multi-command support, use translate_multi() instead.
+        """
+        results = self.translate_multi(user_input, daw_state)
+        if results:
+            return results[0]
+        return TranslationResult(
+            success=False, error="No commands produced", method="fallback"
+        )
+
+    def translate_multi(
+        self, user_input: str, daw_state: DAWState
+    ) -> list[TranslationResult]:
+        """Translate a natural language command to one or more tool calls.
+
+        The model may return a single JSON object or an array of commands
+        with optional delay_ms for sequencing.
         """
         # Try model-based translation
-        # Check is_running OR health_check — the model server may be running
-        # in a different process (e.g., started by the launcher)
         model_available = False
         if self._model_server:
             if self._model_server.is_running:
@@ -99,25 +136,33 @@ class IntentTranslator:
                 model_available = True
 
         if model_available:
-            result = self._translate_with_model(user_input, daw_state)
-            if result.success:
-                return result
-            logger.info(
-                "Model translation failed, trying fallback: %s", result.error
-            )
+            results = self._translate_with_model_multi(user_input, daw_state)
+            if results and all(r.success for r in results):
+                return results
+            if results:
+                logger.info(
+                    "Model translation had failures, trying fallback"
+                )
 
-        # Fallback to rule-based
-        return self._translate_with_rules(user_input, daw_state)
+        # Fallback to rule-based (single command only)
+        fallback = self._translate_with_rules(user_input, daw_state)
+        return [fallback] if fallback.success else [fallback]
 
     def _translate_with_model(
         self, user_input: str, daw_state: DAWState
     ) -> TranslationResult:
-        """Use E2B model to translate command.
+        """Use E2B model to translate command (single result)."""
+        results = self._translate_with_model_multi(user_input, daw_state)
+        if results:
+            return results[0]
+        return TranslationResult(
+            success=False, error="Model returned no response", method="model"
+        )
 
-        Uses a single user message (no system message) because Gemma E2B
-        returns empty responses when given a strict JSON system prompt.
-        Instructions and DAW state go directly in the user message.
-        """
+    def _translate_with_model_multi(
+        self, user_input: str, daw_state: DAWState
+    ) -> list[TranslationResult]:
+        """Use E2B model to translate command (potentially multi-command)."""
         state_desc = self._format_daw_state(daw_state)
 
         # Single user message with everything — Gemma E2B works best this way
@@ -128,7 +173,7 @@ class IntentTranslator:
                     f"{SYSTEM_PROMPT}\n\n"
                     f"Current DAW state:\n{state_desc}\n\n"
                     f"User command: {user_input}\n\n"
-                    f"Respond with only the JSON object."
+                    f"Respond with only the JSON (object or array)."
                 ),
             },
         ]
@@ -137,13 +182,13 @@ class IntentTranslator:
             messages, temperature=0.1, max_tokens=1024
         )
         if raw is None:
-            return TranslationResult(
+            return [TranslationResult(
                 success=False,
                 error="Model returned no response",
                 method="model",
-            )
+            )]
 
-        return self._parse_response(raw, method="model")
+        return self._parse_response_multi(raw, method="model")
 
     def _translate_with_rules(
         self, user_input: str, daw_state: DAWState
@@ -276,7 +321,19 @@ class IntentTranslator:
     def _parse_response(
         self, raw: str, method: str = "model"
     ) -> TranslationResult:
-        """Parse model response into TranslationResult."""
+        """Parse model response into a single TranslationResult."""
+        results = self._parse_response_multi(raw, method)
+        return results[0] if results else TranslationResult(
+            success=False, error="Could not parse response", method=method
+        )
+
+    def _parse_response_multi(
+        self, raw: str, method: str = "model"
+    ) -> list[TranslationResult]:
+        """Parse model response into one or more TranslationResults.
+
+        Handles both single JSON objects and JSON arrays of commands.
+        """
         data = None
 
         # Try direct JSON parse
@@ -285,7 +342,7 @@ class IntentTranslator:
         except json.JSONDecodeError:
             # Try extracting JSON from markdown code block
             json_match = re.search(
-                r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL
+                r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", raw, re.DOTALL
             )
             if json_match:
                 try:
@@ -293,9 +350,9 @@ class IntentTranslator:
                 except json.JSONDecodeError:
                     pass
 
-            # Try finding first { ... } in the text
+            # Try finding first { ... } or [ ... ] in the text
             if data is None:
-                brace_match = re.search(r"\{.*\}", raw, re.DOTALL)
+                brace_match = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
                 if brace_match:
                     try:
                         data = json.loads(brace_match.group(0))
@@ -303,63 +360,94 @@ class IntentTranslator:
                         pass
 
             if data is None:
-                return TranslationResult(
+                return [TranslationResult(
                     success=False,
                     error="Could not parse JSON from response",
                     raw_response=raw,
                     method=method,
-                )
+                )]
 
-        # Check for model-reported errors
-        if "error" in data:
-            return TranslationResult(
+        # Normalize to list
+        if isinstance(data, dict):
+            items = [data]
+        elif isinstance(data, list):
+            items = data
+        else:
+            return [TranslationResult(
                 success=False,
-                error=data.get("message", data["error"]),
+                error=f"Expected JSON object or array, got {type(data).__name__}",
                 raw_response=raw,
                 method=method,
-            )
+            )]
 
-        # Validate tool name
-        tool = data.get("tool", "")
-        if tool not in TOOL_SCHEMAS:
-            return TranslationResult(
-                success=False,
-                error=f"Unknown tool: {tool}",
+        results = []
+        for item in items:
+            if not isinstance(item, dict):
+                results.append(TranslationResult(
+                    success=False,
+                    error=f"Expected object in array, got {type(item).__name__}",
+                    raw_response=raw,
+                    method=method,
+                ))
+                continue
+
+            # Check for model-reported errors
+            if "error" in item:
+                results.append(TranslationResult(
+                    success=False,
+                    error=item.get("message", item["error"]),
+                    raw_response=raw,
+                    method=method,
+                ))
+                continue
+
+            tool = item.get("tool", "")
+            if tool not in TOOL_SCHEMAS:
+                results.append(TranslationResult(
+                    success=False,
+                    error=f"Unknown tool: {tool}",
+                    raw_response=raw,
+                    method=method,
+                ))
+                continue
+
+            args = item.get("args", {})
+            args = self._normalize_args(tool, args)
+
+            # Basic arg type coercion
+            expected = TOOL_SCHEMAS[tool]
+            for key, expected_type in expected.items():
+                if key in args:
+                    try:
+                        if expected_type == int:
+                            args[key] = int(args[key])
+                        elif expected_type == float:
+                            args[key] = float(args[key])
+                        elif expected_type == bool:
+                            args[key] = bool(args[key])
+                    except (ValueError, TypeError):
+                        results.append(TranslationResult(
+                            success=False,
+                            error=f"Invalid type for {key}: expected {expected_type.__name__}",
+                            raw_response=raw,
+                            method=method,
+                        ))
+                        continue
+
+            # Extract delay_ms for sequencing
+            delay_ms = item.get("delay_ms", 0)
+
+            result = TranslationResult(
+                success=True,
+                tool=tool,
+                args=args,
                 raw_response=raw,
                 method=method,
+                delay_ms=delay_ms,
             )
+            results.append(result)
 
-        args = data.get("args", {})
-
-        # Normalize common model mistakes with argument names
-        args = self._normalize_args(tool, args)
-
-        # Basic arg type coercion
-        expected = TOOL_SCHEMAS[tool]
-        for key, expected_type in expected.items():
-            if key in args:
-                try:
-                    if expected_type == int:
-                        args[key] = int(args[key])
-                    elif expected_type == float:
-                        args[key] = float(args[key])
-                    elif expected_type == bool:
-                        args[key] = bool(args[key])
-                except (ValueError, TypeError):
-                    return TranslationResult(
-                        success=False,
-                        error=f"Invalid type for {key}: expected {expected_type.__name__}",
-                        raw_response=raw,
-                        method=method,
-                    )
-
-        return TranslationResult(
-            success=True,
-            tool=tool,
-            args=args,
-            raw_response=raw,
-            method=method,
-        )
+        return results
 
     @staticmethod
     def _format_daw_state(state: DAWState) -> str:
