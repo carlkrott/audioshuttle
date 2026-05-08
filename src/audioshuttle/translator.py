@@ -131,7 +131,7 @@ class IntentTranslator:
         ]
 
         raw = self._model_server.chat(
-            messages, temperature=0.1, max_tokens=256
+            messages, temperature=0.1, max_tokens=1024
         )
         if raw is None:
             return TranslationResult(

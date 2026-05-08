@@ -29,11 +29,34 @@ class ModelServer:
         self._base_url = self._settings.model_api_url.replace(
             "/v1/chat/completions", ""
         )
+        self._external_last_check: float = 0.0
+        self._external_available: bool = False
+        self._external_mode: bool = False
 
     @property
     def is_running(self) -> bool:
-        """Check if the model server process is alive."""
-        return self._process is not None and self._process.poll() is None
+        """Check if the model server is available.
+
+        If we spawned a subprocess, check if it's alive.
+        If in external mode (connect to pre-existing server), use cached health check.
+        """
+        if self._process is not None:
+            return self._process.poll() is None
+        # External mode — cached health check (probe every 10s)
+        if self._external_mode:
+            now = time.time()
+            if now - self._external_last_check > 10.0:
+                self._external_available = self.health_check()
+                self._external_last_check = now
+            return self._external_available
+        # No subprocess, not external mode → not running
+        return False
+
+    def enable_external(self) -> None:
+        """Enable external mode — probe for a pre-existing model server."""
+        self._external_mode = True
+        self._external_available = self.health_check()
+        self._external_last_check = time.time()
 
     @property
     def base_url(self) -> str:
@@ -173,14 +196,15 @@ class ModelServer:
         self,
         messages: list[dict[str, str]],
         temperature: float = 0.3,
-        max_tokens: int = 512,
+        max_tokens: int = 1024,
     ) -> str | None:
         """Send a chat completion request to the model server.
 
         Args:
             messages: OpenAI-format messages list.
             temperature: Sampling temperature.
-            max_tokens: Max tokens in response.
+            max_tokens: Max tokens in response (default 1024 — E2B thinking
+                mode uses tokens for reasoning, so we need headroom).
 
         Returns:
             Assistant message content, or None on error.
@@ -198,7 +222,14 @@ class ModelServer:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
+            content = message.get("content", "")
+            # E2B thinking mode: content may be empty while reasoning is present
+            if not content:
+                reasoning = message.get("reasoning_content", "")
+                if reasoning:
+                    content = reasoning
+            return content or None
         except Exception as e:
             logger.error("Model chat request failed: %s", e)
             return None

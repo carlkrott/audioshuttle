@@ -96,26 +96,35 @@ def launch(
         feedback_port=settings.reaper_feedback_port,
     )
 
-    # Embedded model server (optional — skip with --no-model)
+    # Embedded model server (optional — skip spawning with --no-model)
     model_server = None
     model_ok = False
-    if not no_model and settings.model_enabled:
-        try:
-            from audioshuttle.model_server import ModelServer
+    try:
+        from audioshuttle.model_server import ModelServer
 
-            model_server = ModelServer(settings)
+        model_server = ModelServer(settings)
+
+        if not no_model and settings.model_enabled:
+            # Start our own llama-server subprocess
             started = model_server.start(wait=True, timeout=60.0)
             if started:
-                logger.info("E2B model server ready")
+                logger.info("E2B model server ready (spawned)")
                 model_ok = True
             else:
                 logger.warning("E2B model server failed — text-only mode")
                 model_server = None
-        except Exception as e:
-            logger.warning("E2B model server error: %s — text-only mode", e)
-            model_server = None
-    else:
-        logger.info("Model server skipped (--no-model or disabled)")
+        else:
+            # External server — probe for pre-existing model server
+            model_server.enable_external()
+            if model_server.is_running:
+                logger.info("External model server detected at %s", model_server.base_url)
+                model_ok = True
+            else:
+                logger.info("No external model server found — text-only mode")
+                model_server = None
+    except Exception as e:
+        logger.warning("Model server error: %s — text-only mode", e)
+        model_server = None
 
     translator = IntentTranslator(model_server)
     context_manager = ContextManager(model_server, settings.memory_vault_path)
