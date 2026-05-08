@@ -67,6 +67,9 @@ Rules:
 - FX and parameter indices are 0-based
 """
 
+# Immutable original — used by reset endpoint
+_DEFAULT_PROMPT = SYSTEM_PROMPT
+
 
 def update_system_prompt(new_prompt: str) -> None:
     """Update the module-level SYSTEM_PROMPT used by IntentTranslator."""

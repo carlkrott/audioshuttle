@@ -76,29 +76,12 @@ async def midi_send(
         return RedirectResponse(url="/midi", status_code=303)
 
     # Check model server
-    if model_server is None or not (
-        hasattr(model_server, "is_running") and model_server.is_running
-    ):
-        # Fallback: try health_check
-        if model_server and hasattr(model_server, "health_check"):
-            import asyncio
-
-            try:
-                healthy = await asyncio.to_thread(model_server.health_check)
-                if not healthy:
-                    raise Exception("not healthy")
-            except Exception:
-                app.state.midi_send_result = {
-                    "success": False,
-                    "message": "Model server required for MIDI track assignment. Start it first.",
-                }
-                return RedirectResponse(url="/midi", status_code=303)
-        else:
-            app.state.midi_send_result = {
-                "success": False,
-                "message": "Model server required for MIDI track assignment.",
-            }
-            return RedirectResponse(url="/midi", status_code=303)
+    if model_server is None or not model_server.is_running:
+        app.state.midi_send_result = {
+            "success": False,
+            "message": "Model server required for MIDI track assignment. Start the E2B model first.",
+        }
+        return RedirectResponse(url="/midi", status_code=303)
 
     # Construct prompt for E2B
     role = pattern.get("role", "drums")
@@ -112,13 +95,18 @@ async def midi_send(
     )
 
     try:
-        response = model_server.chat(prompt)
+        response = model_server.chat(
+            [{"role": "user", "content": prompt}],
+            max_tokens=1024,
+        )
         if response:
             # Try to execute via translator/bridge
             translator = getattr(app.state, "translator", None)
             bridge = getattr(app.state, "bridge", None)
             if translator and bridge:
-                result = translator.translate(description.strip())
+                from audioshuttle.models import DAWState
+
+                result = translator.translate(description.strip(), DAWState())
                 app.state.midi_send_result = {
                     "success": result.success,
                     "message": f"E2B response: {response[:200]}",

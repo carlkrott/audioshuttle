@@ -9,20 +9,24 @@
     <textarea name="system_prompt" rows="20" style="width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; resize: vertical;">{{ system_prompt }}</textarea>
     <div style="margin-top: 8px; display: flex; gap: 8px;">
         <button type="submit" style="background: #0f9b58; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Save</button>
-        <form method="POST" action="/input/system-prompt/reset" style="display:inline;">
-            <button type="submit" style="background: #30363d; color: #aaa; border: 1px solid #444; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Reset to Default</button>
-        </form>
     </div>
+</form>
+<form method="POST" action="/input/system-prompt/reset" style="display:inline; margin-top: 8px;">
+    <button type="submit" style="background: #30363d; color: #aaa; border: 1px solid #444; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Reset to Default</button>
 </form>
 
 <h2 style="margin-top: 24px;">🎙 Voice Commands</h2>
 
-{% if not stt_available %}
+    {% if not stt_available %}
 <div style="background: #ea433522; border: 1px solid #ea4335; border-radius: 6px; padding: 12px; margin-bottom: 16px; color: #ea4335; font-size: 13px;">
     Voice commands require faster-whisper. Install with: <code>pip install audioshuttle[stt]</code>
 </div>
 {% else %}
 <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin-bottom: 16px;">
+    <!-- Mic setup note -->
+    <div style="background: #161b22; border: 1px solid #21262d; border-radius: 4px; padding: 8px 12px; margin-bottom: 12px; font-size: 11px; color: #888;">
+        💡 Tip: If mic doesn't work, make sure you're accessing via <code style="color:#0f9b58;">http://localhost:8765</code> (not 127.0.0.1) and that your browser allows microphone access for this site.
+    </div>
     <!-- Cleanup Audio toggle -->
     <form method="POST" action="/input/voice-settings" style="margin-bottom: 12px;">
         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: #c9d1d9;">
@@ -113,26 +117,36 @@ let selectedMicId = null;
 
 // Enumerate microphones on page load
 async function enumMics() {
+    const statusEl = document.getElementById('mic-status');
+    const selectEl = document.getElementById('mic-select');
     try {
-        // Need permission first to see device labels
+        // Try to get mic access first (needed to see device labels)
         const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         tempStream.getTracks().forEach(t => t.stop());
 
         const devices = await navigator.mediaDevices.enumerateDevices();
         const mics = devices.filter(d => d.kind === 'audioinput');
-        const select = document.getElementById('mic-select');
-        select.innerHTML = '<option value="">Default</option>';
+        selectEl.innerHTML = '<option value="">Default</option>';
         mics.forEach((m, i) => {
             const opt = document.createElement('option');
             opt.value = m.deviceId;
             opt.textContent = m.label || `Microphone ${i + 1}`;
             select.appendChild(opt);
         });
-        document.getElementById('mic-status').textContent = `${mics.length} mic(s) found`;
-        document.getElementById('mic-status').style.color = '#0f9b58';
+        statusEl.textContent = `${mics.length} mic(s) found`;
+        statusEl.style.color = '#0f9b58';
     } catch (err) {
-        document.getElementById('mic-status').textContent = 'Mic access denied';
-        document.getElementById('mic-status').style.color = '#ea4335';
+        selectEl.innerHTML = '<option value="">No devices</option>';
+        if (err.name === 'NotAllowedError') {
+            statusEl.innerHTML = '❌ Mic blocked — click the lock/icon in your browser address bar → allow Microphone';
+            statusEl.style.color = '#ea4335';
+        } else if (err.name === 'NotFoundError') {
+            statusEl.innerHTML = '❌ No audio input found — is PipeWire/PulseAudio running? <code>systemctl --user start pipewire</code>';
+            statusEl.style.color = '#ea4335';
+        } else {
+            statusEl.textContent = '❌ ' + err.message;
+            statusEl.style.color = '#ea4335';
+        }
     }
 }
 
