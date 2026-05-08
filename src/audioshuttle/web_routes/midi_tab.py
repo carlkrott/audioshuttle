@@ -84,7 +84,6 @@ async def midi_send(
         return RedirectResponse(url="/midi", status_code=303)
 
     # Use the translator to interpret the user's description
-    # The MIDI pattern context is informational — the translator maps to real tools
     translator = getattr(app.state, "translator", None)
     bridge = getattr(app.state, "bridge", None)
 
@@ -97,15 +96,14 @@ async def midi_send(
 
     role = pattern.get("role", "drums")
 
-    # Send the user's description to the translator with MIDI context
-    # The translator will use the real tool list from SYSTEM_PROMPT
+    # Send the user's description to the translator
     combined_input = f"Set up a {role} track in the DAW. {description.strip()}"
 
     try:
         from audioshuttle.models import DAWState
 
         result = translator.translate(combined_input, DAWState())
-        if result.success:
+        if result.success and result.tool:
             # Execute the tool on the bridge
             from audioshuttle.voice import _execute_tool
             try:
@@ -118,9 +116,15 @@ async def midi_send(
                 "command": result.tool,
             }
         else:
+            # The E2B can't create tracks or set tempo — be honest about it
             app.state.midi_send_result = {
                 "success": False,
-                "message": f"Could not interpret: {result.error}",
+                "message": (
+                    f"MIDI pattern generated for {role}. "
+                    f"Note: The current tool set doesn't support track creation or tempo changes — "
+                    f"create the track in Reaper, then use voice commands like 'mute track 1' or 'set volume'. "
+                    f"(E2B: {result.error or 'no matching tool'})"
+                ),
             }
     except Exception as e:
         logger.warning("MIDI send error: %s", e)

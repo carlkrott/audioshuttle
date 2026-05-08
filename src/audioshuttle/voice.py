@@ -237,6 +237,8 @@ class VoicePipeline:
         Light normalization: remove fillers, fix false starts, normalize language.
         Does NOT convert to OSC or interpret the command.
         """
+        import re
+
         prompt = (
             "Clean up this voice transcription for DAW command processing. "
             "Remove filler words (um, uh, like), fix false starts, "
@@ -248,9 +250,36 @@ class VoicePipeline:
             [{"role": "user", "content": prompt}],
             max_tokens=256,
         )
-        if result:
-            return result.strip()
-        return raw_text
+        if not result:
+            return raw_text
+
+        cleaned = result.strip()
+
+        # Strip E2B thinking process if it leaked through
+        # The E2B sometimes returns thinking as the content when max_tokens is low
+        if cleaned.startswith("Thinking Process:") or cleaned.startswith("1."):
+            # Try to find the actual answer after the thinking
+            match = re.search(
+                r'(?:Final|Cleaned|Output|Answer|Result):\s*(.+)',
+                cleaned, re.IGNORECASE | re.DOTALL,
+            )
+            if match:
+                cleaned = match.group(1).strip()
+            else:
+                # Take the last non-empty, non-numbered line
+                lines = [
+                    l.strip()
+                    for l in cleaned.split('\n')
+                    if l.strip() and not l.strip().startswith(('*', '-', '1.', '2.', '3.', '4.', '5.'))
+                ]
+                if lines:
+                    cleaned = lines[-1]
+
+        # If we still have a massive thinking dump, fall back to raw
+        if len(cleaned) > 200 or 'Thinking Process' in cleaned:
+            return raw_text
+
+        return cleaned
 
     def process_text_only(self, text: str, cleanup: bool = True) -> dict:
         """Process text input through translation (skip STT).
