@@ -585,16 +585,32 @@ class ReaperOSC:
             f"Generated {role} pattern → {home_copy}",
         )
 
-        # Try Reaper import via action 40053
-        # Note: This may open a file dialog. For automated import, see
-        # the ReaScript in reaper_scripts/import_midi.lua.
-        result = self.send_command("/action", 40053)
+        # Import into the running Reaper instance via CLI
+        # -nonewinst sends to existing instance (no popup, no audio hardware error)
+        import subprocess
+        try:
+            subprocess.Popen(
+                ["reaper", "-nonewinst", midi_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            imported = True
+        except FileNotFoundError:
+            imported = False
+
+        if not imported:
+            self._log_command(
+                "insert_midi_pattern",
+                "Reaper CLI not found — MIDI file saved but not imported. "
+                f"Drag {home_copy} into Reaper manually.",
+            )
 
         return CommandResult(
             success=True,
             address="/action",
-            sent_value=40053,
-            reaper_feedback=f"MIDI pattern saved to {home_copy}",
+            sent_value=midi_path,
+            reaper_feedback=f"{role} pattern → {home_copy}"
+            + (" (imported)" if imported else " (file saved, Reaper CLI not found)"),
         )
 
     # ── Track arm ────────────────────────────────────────────────
