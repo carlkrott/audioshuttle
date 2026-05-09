@@ -211,10 +211,10 @@ class VoicePipeline:
             # Step 4: Execute command chain via bridge
             if commands and self._bridge:
                 try:
-                    # Check if Reaper is connected
+                    # Check if Reaper is connected (is_connected is a property, not a method)
                     reaper_online = (
                         hasattr(self._bridge, 'is_connected')
-                        and self._bridge.is_connected()
+                        and self._bridge.is_connected
                     )
                     if not reaper_online:
                         # Try a probe to detect Reaper

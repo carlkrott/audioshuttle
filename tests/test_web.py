@@ -96,12 +96,19 @@ def test_input_save_confirmation(client):
 
 
 def test_input_persists_prompt(client):
-    # Save a prompt
-    client.post("/input/system-prompt", data={"system_prompt": "You are a DAW assistant that controls Reaper."})
-    # Load input page — should show saved prompt
-    resp = client.get("/input")
-    assert resp.status_code == 200
-    assert "DAW assistant that controls Reaper" in resp.text
+    from audioshuttle.web_routes.input_tab import _PROMPT_FILE
+
+    try:
+        # Save a prompt
+        client.post("/input/system-prompt", data={"system_prompt": "You are a DAW assistant that controls Reaper."})
+        # Load input page — should show saved prompt
+        resp = client.get("/input")
+        assert resp.status_code == 200
+        assert "DAW assistant that controls Reaper" in resp.text
+    finally:
+        # Clean up — don't leave stale prompt file
+        if _PROMPT_FILE.exists():
+            _PROMPT_FILE.unlink()
 
 
 # ── Output tab tests ──────────────────────────────────────────
