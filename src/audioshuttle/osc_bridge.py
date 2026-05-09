@@ -585,15 +585,16 @@ class ReaperOSC:
             f"Generated {role} pattern → {home_copy}",
         )
 
-        # Import into the running Reaper instance
-        # Must run as the same user that owns the Reaper process
-        # to avoid spawning a new instance.
+        # Import into the running Reaper instance.
+        # AudioShuttle may run as a different user than Reaper.
+        # Use systemd-run --user to launch in Reaper's user session,
+        # which lets Reaper's own single-instance handling take over.
         import getpass
         import glob
         import subprocess
 
         reaper_user = None
-        reaper_env = {}
+        reaper_dbus = ""
         try:
             for pid_dir in glob.glob("/proc/[0-9]*"):
                 try:
@@ -605,51 +606,37 @@ class ReaperOSC:
                         for line in env_data.split("\0"):
                             if "=" in line:
                                 k, v = line.split("=", 1)
-                                reaper_env[k] = v
-                        reaper_user = reaper_env.get("USER", reaper_env.get("LOGNAME"))
+                                if k == "USER" or k == "LOGNAME":
+                                    reaper_user = v
+                                if k == "DBUS_SESSION_BUS_ADDRESS":
+                                    reaper_dbus = v
                         break
                 except (OSError, PermissionError):
                     continue
         except Exception:
             pass
 
-        imported = False
         current_user = getpass.getuser()
 
-        if reaper_user and reaper_user != current_user:
-            # Reaper runs as different user
-            # Use D-Bus activation to send file to existing instance
-            dbus_addr = reaper_env.get("DBUS_SESSION_BUS_ADDRESS", "")
-            xdg_runtime = reaper_env.get("XDG_RUNTIME_DIR", "")
-
-            # Try kioclient (KDE) or dbus-send (generic)
-            env_prefix = (
-                f"DBUS_SESSION_BUS_ADDRESS={dbus_addr} "
-                f"XDG_RUNTIME_DIR={xdg_runtime} "
-                f"XDG_CURRENT_DESKTOP=KDE "
-            )
+        if reaper_user and reaper_user != current_user and reaper_dbus:
+            # Run reaper in Reaper's user session via systemd --user
+            # This lets Reaper's own multinst=0 single-instance handling work
             try:
                 subprocess.Popen(
-                    f"sudo -u {reaper_user} {env_prefix} "
-                    f"kioclient exec {midi_path}",
-                    shell=True,
+                    [
+                        "sudo", "-u", reaper_user,
+                        f"DBUS_SESSION_BUS_ADDRESS={reaper_dbus}",
+                        "systemd-run", "--user", "--unit=audioshuttle-midi-import",
+                        "/usr/lib/REAPER/reaper", midi_path,
+                    ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
                 imported = True
-            except Exception:
-                try:
-                    subprocess.Popen(
-                        f"sudo -u {reaper_user} {env_prefix} "
-                        f"xdg-open {midi_path}",
-                        shell=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    imported = True
-                except Exception:
-                    imported = False
+            except FileNotFoundError:
+                imported = False
         else:
+            # Same user — direct reaper -nonewinst
             try:
                 subprocess.Popen(
                     ["reaper", "-nonewinst", midi_path],
