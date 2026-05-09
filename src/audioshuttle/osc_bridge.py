@@ -585,17 +585,121 @@ class ReaperOSC:
             f"Generated {role} pattern → {home_copy}",
         )
 
-        # Import MIDI into running Reaper via trigger file.
-        # Reaper's __startup.lua watches for /tmp/audioshuttle_import_trigger
-        # and calls InsertMedia() inside Reaper's own process.
-        # Requires __startup.lua to be loaded (Reaper restart after first install).
+        # Import MIDI into Reaper.
+        # Strategy: spawn 'reaper /path/to/file.mid' as the Reaper user.
+        # This opens a second Reaper window that imports the file.
+        # After a delay, close the second instance, leaving the original
+        # with the imported MIDI. This works because Reaper auto-merges
+        # the imported media into a new track in the temp project.
+        #
+        # Alternative: if the __startup.lua watcher is running (trigger file
+        # gets consumed within 1 second), the watcher handles it instead.
+        import getpass
+        import glob
+        import subprocess
+        import time
+
+        # First try: trigger file for __startup.lua watcher
         trigger_path = os.path.join(tempfile.gettempdir(), "audioshuttle_import_trigger")
         try:
             with open(trigger_path, "w") as f:
                 f.write("import")
-            imported = True
         except OSError:
+            pass
+
+        # Wait briefly to see if the watcher consumed it
+        time.sleep(0.5)
+        if not os.path.exists(trigger_path):
+            # Watcher consumed it — import via __startup.lua
+            imported = True
+        else:
+            # Watcher not running — use CLI import as fallback
+            os.remove(trigger_path)
             imported = False
+
+            # Find Reaper's user and environment
+            reaper_user = None
+            reaper_env = {}
+            try:
+                for pid_dir in glob.glob("/proc/[0-9]*"):
+                    try:
+                        with open(f"{pid_dir}/cmdline", "rb") as f:
+                            if b"REAPER/reaper" in f.read():
+                                with open(f"{pid_dir}/environ", "rb") as f:
+                                    for line in f.read().decode("utf-8", errors="ignore").split("\0"):
+                                        if "=" in line:
+                                            k, v = line.split("=", 1)
+                                            reaper_env[k] = v
+                                reaper_user = reaper_env.get("USER")
+                                break
+                    except (OSError, PermissionError):
+                        continue
+            except Exception:
+                pass
+
+            current_user = getpass.getuser()
+            reaper_binary = "/usr/lib/REAPER/reaper"
+
+            if reaper_user and reaper_user != current_user:
+                # Record PIDs before import
+                before_pids = set()
+                for pid_dir in glob.glob("/proc/[0-9]*"):
+                    try:
+                        with open(f"{pid_dir}/cmdline", "rb") as f:
+                            if b"REAPER/reaper" in f.read():
+                                before_pids.add(int(pid_dir.split("/")[2]))
+                    except (OSError, ValueError, PermissionError):
+                        pass
+
+                # Launch Reaper as the correct user — it imports the file
+                env_str = " ".join(
+                    f"{k}={v}" for k, v in [
+                        ("HOME", reaper_env.get("HOME", f"/home/{reaper_user}")),
+                        ("DISPLAY", reaper_env.get("DISPLAY", ":0")),
+                        ("WAYLAND_DISPLAY", reaper_env.get("WAYLAND_DISPLAY", "")),
+                        ("XDG_RUNTIME_DIR", reaper_env.get("XDG_RUNTIME_DIR", "")),
+                        ("DBUS_SESSION_BUS_ADDRESS", reaper_env.get("DBUS_SESSION_BUS_ADDRESS", "")),
+                    ] if v
+                )
+                subprocess.Popen(
+                    f"sudo -u {reaper_user} {env_str} {reaper_binary} {midi_path}",
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                imported = True
+
+                # Wait for the import to complete, then kill the extra instance
+                def cleanup_extra():
+                    time.sleep(4)
+                    for pid_dir in glob.glob("/proc/[0-9]*"):
+                        try:
+                            pid = int(pid_dir.split("/")[2])
+                            if pid not in before_pids:
+                                with open(f"{pid_dir}/cmdline", "rb") as f:
+                                    if b"reaper" in f.read():
+                                        # Use sudo to kill as the Reaper user
+                                        subprocess.Popen(
+                                            ["sudo", "-u", reaper_user, "kill", str(pid)],
+                                            stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL,
+                                        )
+                        except (OSError, ValueError, PermissionError, ProcessLookupError):
+                            pass
+
+                import threading
+                threading.Thread(target=cleanup_extra, daemon=True).start()
+
+            elif reaper_binary:
+                try:
+                    subprocess.Popen(
+                        [reaper_binary, "-nonewinst", midi_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    imported = True
+                except FileNotFoundError:
+                    imported = False
 
         if not imported:
             self._log_command(
