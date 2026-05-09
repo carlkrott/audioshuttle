@@ -225,9 +225,15 @@ class VoicePipeline:
                             reaper_online = self._bridge.probe(timeout=0.5)
 
                     for i, cmd in enumerate(commands):
-                        # Apply delay before this command (except the first)
-                        if i > 0 and cmd.get("delay_ms", 0) > 0:
-                            await asyncio.sleep(cmd["delay_ms"] / 1000.0)
+                        # Delay between commands: explicit delay_ms from model,
+                        # or a small gap before MIDI import (Reaper needs a moment
+                        # to finish creating tracks before we drop a file in)
+                        if i > 0:
+                            delay = cmd.get("delay_ms", 0)
+                            if delay > 0:
+                                await asyncio.sleep(delay / 1000.0)
+                            elif cmd["tool"] == "insert_midi_pattern":
+                                await asyncio.sleep(0.3)  # Let track creation settle
                         logger.info(
                             "Executing command %d/%d: %s(%s)",
                             i + 1, len(commands), cmd["tool"], cmd["args"],
