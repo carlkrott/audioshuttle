@@ -60,17 +60,24 @@ class ReaperOSC:
     WARNING_AFTER: float = 60.0
 
     # Whitelist of known Reaper OSC address patterns (regex)
+    # Based on Default.ReaperOSC pattern file
     _ADDRESS_PATTERNS: list[re.Pattern[str]] = [
         re.compile(p)
         for p in [
+            # Transport (triggers — no value needed)
             r"^/play$",
             r"^/stop$",
             r"^/record$",
             r"^/pause$",
             r"^/rewind$",
             r"^/forward$",
+            r"^/repeat$",
+            r"^/click$",
+            # Time/tempo
             r"^/time$",
-            r"^/bpm$",
+            r"^/tempo/raw$",
+            r"^/playrate/raw$",
+            # Track controls
             r"^/track/\d+/volume$",
             r"^/track/\d+/mute$",
             r"^/track/\d+/solo$",
@@ -81,15 +88,27 @@ class ReaperOSC:
             r"^/track/\d+/fx/\d+/fxparam/\d+/value$",
             r"^/track/\d+/fx/\d+/bypass$",
             r"^/track/\d+/send/\d+/volume$",
+            r"^/track/\d+/monitor$",
             r"^/track/count$",
+            # Selected-track controls (for select-first approach)
+            r"^/track/volume$",
+            r"^/track/mute$",
+            r"^/track/solo$",
+            r"^/track/pan$",
+            r"^/track/name$",
+            r"^/track/select$",
+            r"^/track/recarm$",
+            # Master
             r"^/master/volume$",
             r"^/master/pan$",
+            # Actions
             r"^/action$",
-            r"^/repeat$",
-            r"^/click$",
+            # Markers
             r"^/marker/\d+/name$",
             r"^/marker/\d+/time$",
             r"^/marker/count$",
+            # Device/probe
+            r"^/device/fk/set/notify/activate$",
         ]
     ]
 
@@ -294,20 +313,20 @@ class ReaperOSC:
     # ── Transport ───────────────────────────────────────────────
 
     def transport_play(self) -> CommandResult:
-        """Start playback."""
-        return self.send_command("/play", 1.0)
+        """Start playback (OSC trigger)."""
+        return self.send_command("/play")
 
     def transport_stop(self) -> CommandResult:
-        """Stop playback."""
-        return self.send_command("/stop", 1.0)
+        """Stop playback (OSC trigger)."""
+        return self.send_command("/stop")
 
     def transport_record(self) -> CommandResult:
-        """Toggle recording."""
-        return self.send_command("/record", 1.0)
+        """Toggle recording (OSC trigger)."""
+        return self.send_command("/record")
 
     def transport_pause(self) -> CommandResult:
-        """Pause playback."""
-        return self.send_command("/pause", 1.0)
+        """Pause playback (OSC trigger)."""
+        return self.send_command("/pause")
 
     # ── Track controls ──────────────────────────────────────────
 
@@ -469,16 +488,18 @@ class ReaperOSC:
     def set_tempo(self, bpm: float) -> CommandResult:
         """Set the project tempo in BPM.
 
+        Uses Reaper's OSC address /tempo/raw (not /bpm).
+
         Args:
             bpm: Tempo in BPM (typically 20-300).
         """
         if bpm < 20 or bpm > 300:
             return CommandResult(
                 success=False,
-                address="/bpm",
+                address="/tempo/raw",
                 error=f"BPM must be 20-300, got {bpm}",
             )
-        return self.send_command("/bpm", bpm)
+        return self.send_command("/tempo/raw", float(bpm))
 
     def insert_track(self) -> CommandResult:
         """Insert a new track in Reaper (action 40001)."""
