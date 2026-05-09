@@ -211,11 +211,34 @@ class VoicePipeline:
             # Step 4: Execute command chain via bridge
             if commands and self._bridge:
                 try:
+                    # Check if Reaper is connected
+                    reaper_online = (
+                        hasattr(self._bridge, 'is_connected')
+                        and self._bridge.is_connected()
+                    )
+                    if not reaper_online:
+                        # Try a probe to detect Reaper
+                        if hasattr(self._bridge, 'probe'):
+                            reaper_online = self._bridge.probe(timeout=0.5)
+
                     for i, cmd in enumerate(commands):
                         # Apply delay before this command (except the first)
                         if i > 0 and cmd.get("delay_ms", 0) > 0:
                             await asyncio.sleep(cmd["delay_ms"] / 1000.0)
-                        _execute_tool(self._bridge, cmd["tool"], cmd["args"])
+                        logger.info(
+                            "Executing command %d/%d: %s(%s)",
+                            i + 1, len(commands), cmd["tool"], cmd["args"],
+                        )
+                        result = _execute_tool(self._bridge, cmd["tool"], cmd["args"])
+                        logger.info(
+                            "Command %d result: success=%s",
+                            i + 1,
+                            result.success if result and hasattr(result, 'success') else result,
+                        )
+
+                    if not reaper_online:
+                        logger.warning("Commands sent but Reaper appears offline")
+
                     return {
                         "transcription": raw_text,
                         "formatted": formatted,
@@ -223,6 +246,7 @@ class VoicePipeline:
                         "command": commands[0],  # First command for backwards compat
                         "success": True,
                         "error": None,
+                        "warning": "Reaper may be offline — commands sent but not confirmed" if not reaper_online else None,
                     }
                 except Exception as e:
                     return {

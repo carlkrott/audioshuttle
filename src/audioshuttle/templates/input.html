@@ -313,10 +313,14 @@ async function sendVoice(blob) {
         }
 
         const cmdCount = (result.commands || []).length || (result.command ? 1 : 0);
-        document.getElementById('recording-status').textContent =
-            result.success
-            ? (cmdCount > 1 ? `✓ ${cmdCount} commands executed` : '✓ Command executed')
-            : '✗ ' + (result.error || 'Failed');
+        let statusText;
+        if (result.success) {
+            statusText = cmdCount > 1 ? `✓ ${cmdCount} commands executed` : '✓ Command executed';
+            if (result.warning) statusText += ' ⚠ ' + result.warning;
+        } else {
+            statusText = '✗ ' + (result.error || 'Failed');
+        }
+        document.getElementById('recording-status').textContent = statusText;
     } catch (err) {
         document.getElementById('processing-indicator').style.display = 'none';
         document.getElementById('voice-result').style.display = 'block';
