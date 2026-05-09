@@ -587,9 +587,8 @@ class ReaperOSC:
 
         # Import MIDI into running Reaper via trigger file.
         # Reaper's __startup.lua watches for /tmp/audioshuttle_import_trigger
-        # and calls InsertMedia() inside Reaper's process — no cross-user issues,
-        # no file picker, no second instance, no project replacement.
-        import os
+        # and calls InsertMedia() inside Reaper's own process.
+        # Requires __startup.lua to be loaded (Reaper restart after first install).
         trigger_path = os.path.join(tempfile.gettempdir(), "audioshuttle_import_trigger")
         try:
             with open(trigger_path, "w") as f:
@@ -597,17 +596,6 @@ class ReaperOSC:
             imported = True
         except OSError:
             imported = False
-        else:
-            # Same user — direct reaper -nonewinst
-            try:
-                subprocess.Popen(
-                    ["reaper", "-nonewinst", midi_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                imported = True
-            except FileNotFoundError:
-                imported = False
 
         if not imported:
             self._log_command(
