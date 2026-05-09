@@ -585,18 +585,80 @@ class ReaperOSC:
             f"Generated {role} pattern → {home_copy}",
         )
 
-        # Import into the running Reaper instance via CLI
-        # -nonewinst sends to existing instance (no popup, no audio hardware error)
+        # Import into the running Reaper instance
+        # Must run as the same user that owns the Reaper process
+        # to avoid spawning a new instance.
+        import getpass
+        import glob
         import subprocess
+
+        reaper_user = None
+        reaper_env = {}
         try:
-            subprocess.Popen(
-                ["reaper", "-nonewinst", midi_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            for pid_dir in glob.glob("/proc/[0-9]*"):
+                try:
+                    with open(f"{pid_dir}/cmdline", "rb") as f:
+                        cmdline = f.read().decode("utf-8", errors="ignore")
+                    if "REAPER/reaper" in cmdline:
+                        with open(f"{pid_dir}/environ", "rb") as f:
+                            env_data = f.read().decode("utf-8", errors="ignore")
+                        for line in env_data.split("\0"):
+                            if "=" in line:
+                                k, v = line.split("=", 1)
+                                reaper_env[k] = v
+                        reaper_user = reaper_env.get("USER", reaper_env.get("LOGNAME"))
+                        break
+                except (OSError, PermissionError):
+                    continue
+        except Exception:
+            pass
+
+        imported = False
+        current_user = getpass.getuser()
+
+        if reaper_user and reaper_user != current_user:
+            # Reaper runs as different user
+            # Use D-Bus activation to send file to existing instance
+            dbus_addr = reaper_env.get("DBUS_SESSION_BUS_ADDRESS", "")
+            xdg_runtime = reaper_env.get("XDG_RUNTIME_DIR", "")
+
+            # Try kioclient (KDE) or dbus-send (generic)
+            env_prefix = (
+                f"DBUS_SESSION_BUS_ADDRESS={dbus_addr} "
+                f"XDG_RUNTIME_DIR={xdg_runtime} "
+                f"XDG_CURRENT_DESKTOP=KDE "
             )
-            imported = True
-        except FileNotFoundError:
-            imported = False
+            try:
+                subprocess.Popen(
+                    f"sudo -u {reaper_user} {env_prefix} "
+                    f"kioclient exec {midi_path}",
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                imported = True
+            except Exception:
+                try:
+                    subprocess.Popen(
+                        f"sudo -u {reaper_user} {env_prefix} "
+                        f"xdg-open {midi_path}",
+                        shell=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    imported = True
+                except Exception:
+                    imported = False
+        else:
+            try:
+                subprocess.Popen(
+                    ["reaper", "-nonewinst", midi_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                imported = True
+            except FileNotFoundError:
+                imported = False
 
         if not imported:
             self._log_command(

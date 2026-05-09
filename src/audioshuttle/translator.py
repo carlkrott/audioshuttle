@@ -58,29 +58,30 @@ The "delay_ms" field is optional — use it when commands need timing gaps
 (e.g., "play for a few seconds then stop" → play with 3000ms delay before stop).
 
 Available tools:
-- transport_control(action: "play"|"stop"|"record"|"pause")
-- transport_seek(position_seconds: float)
-- set_track_volume(track: int, volume: float 0.0-1.0)
-- set_track_mute(track: int, mute: bool)
-- set_track_solo(track: int, solo: bool)
-- set_track_pan(track: int, pan: float -1.0 to 1.0)
-- set_master_volume(volume: float)
-- set_master_pan(pan: float)
-- set_fx_param(track: int, fx: int, param: int, value: float)
-- fx_bypass(track: int, fx: int, bypass: bool)
-- trigger_action(command_id: int)
-- set_track_arm(track: int, arm: bool)
-- toggle_repeat()
-- toggle_metronome()
-- list_tracks()
-- get_transport()
-- get_daw_state()
-- get_track_count()
-- set_tempo(bpm: float) — set project tempo in BPM
-- insert_track() — add a new track to the project
-- rename_track(track: int, name: str) — rename a track
-- insert_midi_pattern(role: str) — generate and insert a MIDI drum/beat pattern.
-  role can be: "drums", "bass", "chords", "melody". Generates a 4-bar pattern.
+- transport_control — args: {"action": "play" or "stop" or "record" or "pause"}
+- transport_seek — args: {"position_seconds": float}
+- set_track_volume — args: {"track": int, "volume": float 0.0-1.0}
+- set_track_mute — args: {"track": int, "mute": bool}
+- set_track_solo — args: {"track": int, "solo": bool}
+- set_track_pan — args: {"track": int, "pan": float -1.0 to 1.0}
+- set_master_volume — args: {"volume": float}
+- set_master_pan — args: {"pan": float}
+- set_fx_param — args: {"track": int, "fx": int, "param": int, "value": float}
+- fx_bypass — args: {"track": int, "fx": int, "bypass": bool}
+- trigger_action — args: {"command_id": int}
+- set_track_arm — args: {"track": int, "arm": bool}
+- toggle_repeat — args: {}
+- toggle_metronome — args: {}
+- list_tracks — args: {}
+- get_transport — args: {}
+- get_daw_state — args: {}
+- get_track_count — args: {}
+- set_tempo — args: {"bpm": float}
+- insert_track — args: {}
+- rename_track — args: {"track": int, "name": str}
+- insert_midi_pattern — args: {"role": str} — generates a 4-bar MIDI pattern.
+  ALWAYS pair with insert_track when user says "drums track", "drum beat", "bass line", etc.
+  Example: "add a drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
 
 Rules:
 - Match track NAMES to find track NUMBER from the DAW state

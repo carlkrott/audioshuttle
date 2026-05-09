@@ -288,43 +288,35 @@ class VoicePipeline:
         import re
 
         prompt = (
-            "Clean up this voice transcription for DAW command processing. "
-            "Remove filler words (um, uh, like), fix false starts, "
-            "normalize to clear instruction language. "
-            "Output ONLY the cleaned text, nothing else.\n\n"
+            "Clean up this voice transcription. Remove filler words (um, uh, like), "
+            "fix false starts. Output ONLY the cleaned sentence, nothing else.\n\n"
             f'Raw: "{raw_text}"'
         )
         result = self._model_server.chat(
             [{"role": "user", "content": prompt}],
-            max_tokens=256,
+            max_tokens=128,
         )
         if not result:
             return raw_text
 
         cleaned = result.strip()
 
-        # Strip E2B thinking process if it leaked through
-        # The E2B sometimes returns thinking as the content when max_tokens is low
-        if cleaned.startswith("Thinking Process:") or cleaned.startswith("1."):
-            # Try to find the actual answer after the thinking
-            match = re.search(
-                r'(?:Final|Cleaned|Output|Answer|Result):\s*(.+)',
-                cleaned, re.IGNORECASE | re.DOTALL,
-            )
-            if match:
-                cleaned = match.group(1).strip()
-            else:
-                # Take the last non-empty, non-numbered line
-                lines = [
-                    l.strip()
-                    for l in cleaned.split('\n')
-                    if l.strip() and not l.strip().startswith(('*', '-', '1.', '2.', '3.', '4.', '5.'))
-                ]
-                if lines:
-                    cleaned = lines[-1]
+        # Detect E2B thinking leak — any numbered step, markdown, or structured output
+        # means the model put reasoning in content instead of the actual answer
+        if re.match(r'^\d+[\.\)]\s', cleaned):
+            # Numbered step leaked through — fall back to raw
+            return raw_text
 
-        # If we still have a massive thinking dump, fall back to raw
-        if len(cleaned) > 200 or 'Thinking Process' in cleaned:
+        # Detect markdown formatting (thinking output uses bold, headers, etc.)
+        if '**' in cleaned or cleaned.startswith('#') or cleaned.startswith('```'):
+            return raw_text
+
+        # Detect thinking keywords
+        if any(kw in cleaned.lower() for kw in ('thinking process', 'step ', 'analysis', 'reasoning')):
+            return raw_text
+
+        # If suspiciously long for a cleaned sentence, fall back
+        if len(cleaned) > len(raw_text) * 1.5 or len(cleaned) > 150:
             return raw_text
 
         return cleaned
