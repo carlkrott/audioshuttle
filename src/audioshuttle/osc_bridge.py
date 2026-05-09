@@ -585,56 +585,18 @@ class ReaperOSC:
             f"Generated {role} pattern → {home_copy}",
         )
 
-        # Import into the running Reaper instance.
-        # AudioShuttle may run as a different user than Reaper.
-        # Use systemd-run --user to launch in Reaper's user session,
-        # which lets Reaper's own single-instance handling take over.
-        import getpass
-        import glob
-        import subprocess
-
-        reaper_user = None
-        reaper_dbus = ""
+        # Import MIDI into running Reaper via trigger file.
+        # Reaper's __startup.lua watches for /tmp/audioshuttle_import_trigger
+        # and calls InsertMedia() inside Reaper's process — no cross-user issues,
+        # no file picker, no second instance, no project replacement.
+        import os
+        trigger_path = os.path.join(tempfile.gettempdir(), "audioshuttle_import_trigger")
         try:
-            for pid_dir in glob.glob("/proc/[0-9]*"):
-                try:
-                    with open(f"{pid_dir}/cmdline", "rb") as f:
-                        cmdline = f.read().decode("utf-8", errors="ignore")
-                    if "REAPER/reaper" in cmdline:
-                        with open(f"{pid_dir}/environ", "rb") as f:
-                            env_data = f.read().decode("utf-8", errors="ignore")
-                        for line in env_data.split("\0"):
-                            if "=" in line:
-                                k, v = line.split("=", 1)
-                                if k == "USER" or k == "LOGNAME":
-                                    reaper_user = v
-                                if k == "DBUS_SESSION_BUS_ADDRESS":
-                                    reaper_dbus = v
-                        break
-                except (OSError, PermissionError):
-                    continue
-        except Exception:
-            pass
-
-        current_user = getpass.getuser()
-
-        if reaper_user and reaper_user != current_user and reaper_dbus:
-            # Run reaper in Reaper's user session via systemd --user
-            # This lets Reaper's own multinst=0 single-instance handling work
-            try:
-                subprocess.Popen(
-                    [
-                        "sudo", "-u", reaper_user,
-                        f"DBUS_SESSION_BUS_ADDRESS={reaper_dbus}",
-                        "systemd-run", "--user", "--unit=audioshuttle-midi-import",
-                        "/usr/lib/REAPER/reaper", midi_path,
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                imported = True
-            except FileNotFoundError:
-                imported = False
+            with open(trigger_path, "w") as f:
+                f.write("import")
+            imported = True
+        except OSError:
+            imported = False
         else:
             # Same user — direct reaper -nonewinst
             try:
