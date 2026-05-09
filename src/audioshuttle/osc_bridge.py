@@ -572,16 +572,30 @@ class ReaperOSC:
         with open(midi_path, "wb") as f:
             f.write(buf.getvalue())
 
+        # Also copy to home dir for easy access
+        home_copy = os.path.expanduser("~/audioshuttle_pattern.mid")
+        try:
+            with open(home_copy, "wb") as f:
+                f.write(buf.getvalue())
+        except OSError:
+            home_copy = midi_path
+
         self._log_command(
             f"insert_midi_pattern({role})",
-            f"Generated {role} pattern → {midi_path}",
+            f"Generated {role} pattern → {home_copy}",
         )
 
-        # Trigger Reaper import via action 40053 (Insert media from cursor)
-        # or action 40182 (Insert media file)
-        # Note: This may open a file dialog depending on Reaper config.
-        # For automated import, the user should configure Reaper to auto-import.
-        return self.send_command("/action", 40053)
+        # Try Reaper import via action 40053
+        # Note: This may open a file dialog. For automated import, see
+        # the ReaScript in reaper_scripts/import_midi.lua.
+        result = self.send_command("/action", 40053)
+
+        return CommandResult(
+            success=True,
+            address="/action",
+            sent_value=40053,
+            reaper_feedback=f"MIDI pattern saved to {home_copy}",
+        )
 
     # ── Track arm ────────────────────────────────────────────────
 
