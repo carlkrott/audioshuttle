@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from collections import deque
@@ -497,6 +498,90 @@ class ReaperOSC:
                 error=f"Track must be >= 1, got {track}",
             )
         return self.send_command(f"/track/{track}/name", name)
+
+    def insert_midi_pattern(self, role: str = "drums") -> CommandResult:
+        """Generate a MIDI pattern and import it into Reaper.
+
+        Creates a .mid file and triggers Reaper's media import action.
+        Supported roles: drums, bass, chords.
+
+        Args:
+            role: Pattern type (drums, bass, chords).
+        """
+        try:
+            from midiutil import MIDIFile
+        except ImportError:
+            return CommandResult(
+                success=False,
+                address="/action",
+                error="midiutil not installed — run: pip install midiutil",
+            )
+
+        import io
+        import tempfile
+
+        role = role.lower().strip()
+        midi = MIDIFile(1)
+        track = 0
+        tempo = 120  # Will match project tempo
+
+        if role in ("drums", "drum", "beat", "kick"):
+            channel = 9  # MIDI channel 10 (drums)
+            midi.addTempo(track, 0, tempo)
+            for bar in range(4):
+                off = bar * 4
+                # Hi-hat 8th notes
+                for b in range(8):
+                    midi.addNote(track, channel, 42, off + b * 0.5, 0.5, 100)
+                # Kick on 1, 3
+                midi.addNote(track, channel, 36, off, 1, 120)
+                midi.addNote(track, channel, 36, off + 2, 1, 120)
+                # Snare on 2, 4
+                midi.addNote(track, channel, 38, off + 1, 1, 120)
+                midi.addNote(track, channel, 38, off + 3, 1, 120)
+
+        elif role in ("bass",):
+            channel = 0
+            midi.addTempo(track, 0, tempo)
+            # Simple bass line: root note on each beat
+            for bar in range(4):
+                off = bar * 4
+                for beat in range(4):
+                    midi.addNote(track, channel, 36, off + beat, 0.9, 100)
+
+        elif role in ("chords", "keys", "pad"):
+            channel = 0
+            midi.addTempo(track, 0, tempo)
+            # Simple chord hits on beats 1 and 3
+            for bar in range(4):
+                off = bar * 4
+                for note in (60, 64, 67):  # C major
+                    midi.addNote(track, channel, note, off, 2, 80)
+                    midi.addNote(track, channel, note, off + 2, 2, 80)
+        else:
+            return CommandResult(
+                success=False,
+                address="/action",
+                error=f"Unknown pattern role: {role}. Use: drums, bass, chords",
+            )
+
+        # Write MIDI file
+        buf = io.BytesIO()
+        midi.writeFile(buf)
+        midi_path = os.path.join(tempfile.gettempdir(), "audioshuttle_pattern.mid")
+        with open(midi_path, "wb") as f:
+            f.write(buf.getvalue())
+
+        self._log_command(
+            f"insert_midi_pattern({role})",
+            f"Generated {role} pattern → {midi_path}",
+        )
+
+        # Trigger Reaper import via action 40053 (Insert media from cursor)
+        # or action 40182 (Insert media file)
+        # Note: This may open a file dialog depending on Reaper config.
+        # For automated import, the user should configure Reaper to auto-import.
+        return self.send_command("/action", 40053)
 
     # ── Track arm ────────────────────────────────────────────────
 

@@ -52,7 +52,7 @@ class TestTranslationResult:
 class TestToolSchemas:
     """Test TOOL_SCHEMAS has all expected tools."""
 
-    def test_all_21_tools_present(self):
+    def test_all_22_tools_present(self):
         expected = {
             "list_tracks", "get_transport", "get_daw_state", "get_track_count",
             "transport_control", "transport_seek",
@@ -62,6 +62,7 @@ class TestToolSchemas:
             "trigger_action", "set_track_arm",
             "toggle_repeat", "toggle_metronome",
             "set_tempo", "insert_track", "rename_track",
+            "insert_midi_pattern",
         }
         assert expected == set(TOOL_SCHEMAS.keys())
 

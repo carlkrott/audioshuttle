@@ -37,6 +37,7 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "set_tempo": {"bpm": float},
     "insert_track": {},
     "rename_track": {"track": int, "name": str},
+    "insert_midi_pattern": {"role": str},
 }
 
 SYSTEM_PROMPT = """You translate natural language DAW commands into structured JSON tool calls.
@@ -78,6 +79,8 @@ Available tools:
 - set_tempo(bpm: float) — set project tempo in BPM
 - insert_track() — add a new track to the project
 - rename_track(track: int, name: str) — rename a track
+- insert_midi_pattern(role: str) — generate and insert a MIDI drum/beat pattern.
+  role can be: "drums", "bass", "chords", "melody". Generates a 4-bar pattern.
 
 Rules:
 - Match track NAMES to find track NUMBER from the DAW state

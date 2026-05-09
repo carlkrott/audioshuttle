@@ -67,6 +67,9 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         "rename_track": lambda: bridge.rename_track(
             int(args["track"]), str(args["name"]),
         ),
+        "insert_midi_pattern": lambda: bridge.insert_midi_pattern(
+            str(args.get("role", "drums")),
+        ),
     }
 
     # Discovery tools — no bridge call needed
