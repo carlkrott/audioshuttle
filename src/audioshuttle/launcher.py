@@ -205,15 +205,25 @@ def launch(
         threading.Timer(2.0, lambda: webbrowser.open(web_url)).start()
         logger.info("Browser will open in 2 seconds")
 
-    # Voice hotkey (optional — best-effort)
+    # Voice overlay + hotkey (optional — best-effort)
+    voice_overlay = None
     if voice_pipeline is not None:
         try:
-            from audioshuttle.hotkey import VoiceHotkey
+            from audioshuttle.hotkey import VoiceHotkey, run_overlay_in_thread
+
+            # Start overlay in its own Qt thread
+            try:
+                voice_overlay = run_overlay_in_thread()
+                if voice_overlay:
+                    logger.info("Voice overlay started (PyQt6)")
+            except Exception as e:
+                logger.debug("Voice overlay not available: %s", e)
 
             voice_hotkey = VoiceHotkey(
                 voice_pipeline=voice_pipeline,
                 hotkey=settings.voice_hotkey,
                 sample_rate=settings.voice_sample_rate,
+                overlay=voice_overlay,
             )
             hotkey_ok = voice_hotkey.start()
             if hotkey_ok:
