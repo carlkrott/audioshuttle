@@ -65,6 +65,7 @@ class VoiceHotkey:
             return self._start_keyboard()
         except Exception as e:
             logger.debug("keyboard library not available: %s", e)
+            logger.info("Keyboard hotkey attempt failed: %s", e)
 
         logger.warning(
             "Global hotkey not available on this platform. "
@@ -96,18 +97,23 @@ class VoiceHotkey:
         def on_release():
             self._stop_recording()
 
-        keyboard.add_hotkey(
-            self._hotkey,
-            on_press,
-            args=(),
-            trigger_on_press=True,
-        )
-        keyboard.add_hotkey(
-            self._hotkey,
-            on_release,
-            args=(),
-            trigger_on_release=True,
-        )
+        # Use key event hooks instead of add_hotkey with trigger_on_press
+        # (not all keyboard library versions support trigger_on_press)
+        self._key_pressed = False
+        self._hotkey_keys = keyboard.parse_hotkey(self._hotkey)
+
+        def on_key_event(event):
+            if event.event_type == keyboard.KEY_DOWN and not self._key_pressed:
+                # Check if the hotkey combo is active
+                if keyboard.is_pressed(self._hotkey):
+                    self._key_pressed = True
+                    on_press()
+            elif event.event_type == keyboard.KEY_UP and self._key_pressed:
+                # Check if any of the hotkey keys were released
+                self._key_pressed = False
+                on_release()
+
+        keyboard.hook(on_key_event)
 
         self._running = True
         logger.info("Global hotkey '%s' registered via keyboard library", self._hotkey)

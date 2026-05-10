@@ -211,11 +211,15 @@ def launch(
         try:
             from audioshuttle.hotkey import VoiceHotkey, run_overlay_in_thread
 
-            # Start overlay in its own Qt thread
+            # Start overlay in its own Qt thread (requires DISPLAY)
             try:
-                voice_overlay = run_overlay_in_thread()
-                if voice_overlay:
-                    logger.info("Voice overlay started (PyQt6)")
+                import os
+                if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+                    voice_overlay = run_overlay_in_thread()
+                    if voice_overlay:
+                        logger.info("Voice overlay started (PyQt6)")
+                else:
+                    logger.debug("No display — voice overlay disabled")
             except Exception as e:
                 logger.debug("Voice overlay not available: %s", e)
 
