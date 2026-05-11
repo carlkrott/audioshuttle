@@ -103,10 +103,28 @@ class ReaperOSC:
             r"^/master/pan$",
             # Actions
             r"^/action$",
+            r"^/action/\d+$",
             # Markers
+            r"^/marker/\d+$",
             r"^/marker/\d+/name$",
             r"^/marker/\d+/time$",
+            r"^/marker_id/\d+/name$",
             r"^/marker/count$",
+            # Loop
+            r"^/loop/start/time$",
+            r"^/loop/end/time$",
+            # Track automation
+            r"^/track/\d+/autotrim$",
+            r"^/track/\d+/autoread$",
+            r"^/track/\d+/autolatch$",
+            r"^/track/\d+/autotouch$",
+            r"^/track/\d+/autowrite$",
+            # Track sends
+            r"^/track/\d+/send/\d+/volume$",
+            # FX extended
+            r"^/track/\d+/fx/\d+/preset\+$",
+            r"^/track/\d+/fx/\d+/preset-$",
+            r"^/track/\d+/fx/\d+/wetdry$",
             # Device/probe
             r"^/device/fk/set/notify/activate$",
         ]
@@ -769,6 +787,151 @@ class ReaperOSC:
     def toggle_metronome(self) -> CommandResult:
         """Toggle the metronome/click on/off."""
         return self.send_command("/click")
+
+    # ── Navigation ────────────────────────────────────────────────
+
+    def goto_marker(self, marker: int) -> CommandResult:
+        """Jump to a marker by number."""
+        if marker < 1:
+            return CommandResult(
+                success=False, address="/marker", error=f"Marker must be >= 1, got {marker}"
+            )
+        return self.send_command(f"/marker/{marker}")
+
+    def set_marker_name(self, marker: int, name: str) -> CommandResult:
+        """Name a marker by its ID number."""
+        if marker < 1:
+            return CommandResult(
+                success=False, address="/marker_id/name", error=f"Marker must be >= 1, got {marker}"
+            )
+        return self.send_command(f"/marker_id/{marker}/name", name)
+
+    def set_loop_points(self, start: float, end: float) -> CommandResult:
+        """Set loop start and end points in seconds."""
+        if start < 0 or end <= start:
+            return CommandResult(
+                success=False, address="/loop",
+                error=f"Invalid loop range: {start} to {end}",
+            )
+        self.send_command("/loop/start/time", start)
+        return self.send_command("/loop/end/time", end)
+
+    def rewind(self) -> CommandResult:
+        """Hold rewind (sends toggle)."""
+        return self.send_command("/rewind", 1.0)
+
+    def forward(self) -> CommandResult:
+        """Hold fast forward (sends toggle)."""
+        return self.send_command("/forward", 1.0)
+
+    # ── Track monitoring ──────────────────────────────────────────
+
+    def set_track_monitor(self, track: int, mode: int) -> CommandResult:
+        """Set track monitoring mode.
+
+        Args:
+            track: Track number (>= 1).
+            mode: 0=off, 1=normal, 2=not when playing (tape style).
+        """
+        if track < 1:
+            return CommandResult(
+                success=False, address="/track/monitor",
+                error=f"Track must be >= 1, got {track}",
+            )
+        return self.send_command(f"/track/{track}/monitor", mode)
+
+    # ── Track sends ───────────────────────────────────────────────
+
+    def set_track_send_volume(self, track: int, send: int, volume: float) -> CommandResult:
+        """Set a track send volume.
+
+        Args:
+            track: Track number (>= 1).
+            send: Send index (>= 0).
+            volume: Volume 0.0-1.0.
+        """
+        if track < 1:
+            return CommandResult(
+                success=False, address="/track/send/volume",
+                error=f"Track must be >= 1, got {track}",
+            )
+        volume = max(0.0, min(1.0, volume))
+        return self.send_command(f"/track/{track}/send/{send}/volume", volume)
+
+    # ── Track automation ──────────────────────────────────────────
+
+    def set_track_auto_mode(self, track: int, mode: str) -> CommandResult:
+        """Set track automation mode.
+
+        Args:
+            track: Track number (>= 1).
+            mode: One of 'trim', 'read', 'latch', 'touch', 'write'.
+        """
+        if track < 1:
+            return CommandResult(
+                success=False, address="/track/auto",
+                error=f"Track must be >= 1, got {track}",
+            )
+        mode_map = {
+            "trim": f"/track/{track}/autotrim",
+            "read": f"/track/{track}/autoread",
+            "latch": f"/track/{track}/autolatch",
+            "touch": f"/track/{track}/autotouch",
+            "write": f"/track/{track}/autowrite",
+        }
+        addr = mode_map.get(mode.lower())
+        if not addr:
+            return CommandResult(
+                success=False, address="/track/auto",
+                error=f"Unknown auto mode: {mode}. Use: trim, read, latch, touch, write",
+            )
+        return self.send_command(addr)
+
+    # ── FX extended ───────────────────────────────────────────────
+
+    def fx_next_preset(self, track: int, fx: int) -> CommandResult:
+        """Cycle to next FX preset."""
+        if track < 1 or fx < 0:
+            return CommandResult(
+                success=False, address="/fx/preset+",
+                error=f"Invalid track={track} or fx={fx}",
+            )
+        return self.send_command(f"/track/{track}/fx/{fx}/preset+")
+
+    def fx_prev_preset(self, track: int, fx: int) -> CommandResult:
+        """Cycle to previous FX preset."""
+        if track < 1 or fx < 0:
+            return CommandResult(
+                success=False, address="/fx/preset-",
+                error=f"Invalid track={track} or fx={fx}",
+            )
+        return self.send_command(f"/track/{track}/fx/{fx}/preset-")
+
+    def fx_set_wetdry(self, track: int, fx: int, value: float) -> CommandResult:
+        """Set FX wet/dry mix.
+
+        Args:
+            track: Track number (>= 1).
+            fx: FX index (>= 0).
+            value: Wet/dry 0.0 (dry) to 1.0 (wet).
+        """
+        if track < 1 or fx < 0:
+            return CommandResult(
+                success=False, address="/fx/wetdry",
+                error=f"Invalid track={track} or fx={fx}",
+            )
+        value = max(0.0, min(1.0, value))
+        return self.send_command(f"/track/{track}/fx/{fx}/wetdry", value)
+
+    # ── Undo/Redo via actions ─────────────────────────────────────
+
+    def undo(self) -> CommandResult:
+        """Undo last action (Reaper action 40029)."""
+        return self.send_command("/action/40029")
+
+    def redo(self) -> CommandResult:
+        """Redo last action (Reaper action 40100)."""
+        return self.send_command("/action/40100")
 
     # ── State discovery ─────────────────────────────────────────
 

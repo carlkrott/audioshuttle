@@ -16,29 +16,50 @@ logger = logging.getLogger(__name__)
 
 # Known tool names and their parameter schemas
 TOOL_SCHEMAS: dict[str, dict[str, type]] = {
+    # Discovery
     "list_tracks": {},
     "get_transport": {},
     "get_daw_state": {},
     "get_track_count": {},
+    # Transport
     "transport_control": {"action": str},
     "transport_seek": {"position_seconds": float},
+    "toggle_repeat": {},
+    "toggle_metronome": {},
+    "undo": {},
+    "redo": {},
+    # Tempo
+    "set_tempo": {"bpm": float},
+    # Track controls
     "set_track_volume": {"track": int, "volume": float},
     "set_track_mute": {"track": int, "mute": bool},
     "set_track_solo": {"track": int, "solo": bool},
     "set_track_pan": {"track": int, "pan": float},
+    "set_track_color": {"track": int, "color": str},
+    "set_track_arm": {"track": int, "arm": bool},
+    "set_track_monitor": {"track": int, "mode": int},
+    "set_track_auto_mode": {"track": int, "mode": str},
+    "set_track_send_volume": {"track": int, "send": int, "volume": float},
+    # Master
     "set_master_volume": {"volume": float},
     "set_master_pan": {"pan": float},
-    "set_fx_param": {"track": int, "fx": int, "param": int, "value": float},
-    "fx_bypass": {"track": int, "fx": int, "bypass": bool},
-    "trigger_action": {"command_id": int},
-    "set_track_arm": {"track": int, "arm": bool},
-    "toggle_repeat": {},
-    "toggle_metronome": {},
-    "set_tempo": {"bpm": float},
+    # Track management
     "insert_track": {},
     "rename_track": {"track": int, "name": str},
     "insert_midi_pattern": {"role": str},
-    "set_track_color": {"track": int, "color": str},
+    # FX
+    "set_fx_param": {"track": int, "fx": int, "param": int, "value": float},
+    "fx_bypass": {"track": int, "fx": int, "bypass": bool},
+    "fx_next_preset": {"track": int, "fx": int},
+    "fx_prev_preset": {"track": int, "fx": int},
+    "fx_set_wetdry": {"track": int, "fx": int, "value": float},
+    # Markers
+    "goto_marker": {"marker": int},
+    "set_marker_name": {"marker": int, "name": str},
+    # Loop
+    "set_loop_points": {"start": float, "end": float},
+    # Actions
+    "trigger_action": {"command_id": int},
 }
 
 SYSTEM_PROMPT = """You translate natural language DAW commands into structured JSON tool calls.
@@ -59,33 +80,55 @@ The "delay_ms" field is optional — use it when commands need timing gaps
 (e.g., "play for a few seconds then stop" → play with 3000ms delay before stop).
 
 Available tools:
+
+Transport:
 - transport_control — args: {"action": "play" or "stop" or "record" or "pause"}
 - transport_seek — args: {"position_seconds": float}
+- toggle_repeat — args: {}
+- toggle_metronome — args: {}
+- undo — args: {} — undo last action
+- redo — args: {} — redo last undone action
+
+Tempo:
+- set_tempo — args: {"bpm": float}
+
+Track controls:
 - set_track_volume — args: {"track": int, "volume": float 0.0-1.0}
 - set_track_mute — args: {"track": int, "mute": bool}
 - set_track_solo — args: {"track": int, "solo": bool}
 - set_track_pan — args: {"track": int, "pan": float -1.0 to 1.0}
-- set_master_volume — args: {"volume": float}
-- set_master_pan — args: {"pan": float}
-- set_fx_param — args: {"track": int, "fx": int, "param": int, "value": float}
-- fx_bypass — args: {"track": int, "fx": int, "bypass": bool}
-- trigger_action — args: {"command_id": int}
+- set_track_color — args: {"track": int, "color": str} — hex (#ff0000) or named (red, blue, green, yellow, purple, orange, pink, cyan)
 - set_track_arm — args: {"track": int, "arm": bool}
-- toggle_repeat — args: {}
-- toggle_metronome — args: {}
-- list_tracks — args: {}
-- get_transport — args: {}
-- get_daw_state — args: {}
-- get_track_count — args: {}
-- set_tempo — args: {"bpm": float}
+- set_track_monitor — args: {"track": int, "mode": int} — 0=off, 1=normal, 2=tape/record-only
+- set_track_auto_mode — args: {"track": int, "mode": str} — "trim", "read", "latch", "touch", "write"
+- set_track_send_volume — args: {"track": int, "send": int, "volume": float} — send index 0-based
+
+Track management:
 - insert_track — args: {}
 - rename_track — args: {"track": int, "name": str}
-- set_track_color — args: {"track": int, "color": str} — hex color like "#ff0000" or named color like "red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"
-- insert_midi_pattern — args: {"role": str} — generates a 4-bar MIDI pattern and imports into Reaper.
-  Roles: "drums" (kick/snare/hihat), "bass" (root notes), "chords" (C major pads)
-  CRITICAL: Always pair with insert_track. The pattern needs a track to land on.
-  Correct: [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
-  The system auto-inserts a track if you forget, but explicit is better.
+- insert_midi_pattern — args: {"role": str} — roles: "drums", "bass", "chords"
+  Always pair with insert_track. The pattern needs a track to land on.
+
+Master:
+- set_master_volume — args: {"volume": float}
+- set_master_pan — args: {"pan": float}
+
+FX:
+- set_fx_param — args: {"track": int, "fx": int, "param": int, "value": float}
+- fx_bypass — args: {"track": int, "fx": int, "bypass": bool}
+- fx_next_preset — args: {"track": int, "fx": int} — cycle to next preset
+- fx_prev_preset — args: {"track": int, "fx": int} — cycle to previous preset
+- fx_set_wetdry — args: {"track": int, "fx": int, "value": float 0.0-1.0} — 0=dry, 1=wet
+
+Markers:
+- goto_marker — args: {"marker": int} — jump to marker by number
+- set_marker_name — args: {"marker": int, "name": str} — name a marker
+
+Loop:
+- set_loop_points — args: {"start": float, "end": float} — loop range in seconds
+
+Actions:
+- trigger_action — args: {"command_id": int}
 
 TRACK NUMBERING FOR NEW TRACKS (CRITICAL):
 When inserting new tracks, they are added at the BOTTOM of the track list.
@@ -100,7 +143,13 @@ Multi-command examples:
   "add 3 tracks and set tempo to 140" → [{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"set_tempo","args":{"bpm":140}}]
   "add a bass track and name it bass" (DAW has 3 tracks) → [{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":4,"name":"bass"}}]
   "add drums and mute track 3" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}},{"tool":"set_track_mute","args":{"track":3,"mute":true}}]
-  "add this sequence" or "import this midi" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
+  "go to marker 2 and name it chorus" → [{"tool":"goto_marker","args":{"marker":2}},{"tool":"set_marker_name","args":{"marker":2,"name":"chorus"}}]
+  "arm track 1 for recording and set input monitoring" → [{"tool":"set_track_arm","args":{"track":1,"arm":true}},{"tool":"set_track_monitor","args":{"track":1,"mode":1}}]
+  "more reverb on track 2" → [{"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.8}}]
+  "try the next preset on the guitar" → [{"tool":"fx_next_preset","args":{"track":3,"fx":0}}]
+  "undo that" → [{"tool":"undo","args":{}}]
+  "loop from 10 to 30 seconds" → [{"tool":"set_loop_points","args":{"start":10.0,"end":30.0}}]
+  "set up for recording: arm track 1, monitor on, click track on, record" → [{"tool":"set_track_arm","args":{"track":1,"arm":true}},{"tool":"set_track_monitor","args":{"track":1,"mode":1}},{"tool":"toggle_metronome","args":{}},{"tool":"transport_control","args":{"action":"record"}}]
 
 Rules:
 - Match track NAMES to find track NUMBER from the DAW state
@@ -109,9 +158,12 @@ Rules:
 - Volume: "turn up/increase" ≈ 0.85, "turn down/decrease" ≈ 0.5, "normal" ≈ 0.75
 - "down by N dB" ≈ subtract N*0.01 from current volume (rough approximation)
 - "up by N dB" ≈ add N*0.01 to current volume
-- Track numbers start at 1
-- FX and parameter indices are 0-based
-- Use multiple commands when the user says sequential things like "play then stop" or "mute drums then unmute bass"
+- Track numbers start at 1. FX and parameter indices are 0-based. Send indices are 0-based.
+- "more reverb/delay/echo" → fx_set_wetdry with higher value (0.7-0.9)
+- "less reverb/delay" → fx_set_wetdry with lower value (0.1-0.3)
+- "dry" → fx_set_wetdry value 0.0, "fully wet" → value 1.0
+- "arm for recording" → set_track_arm arm=true + set_track_monitor mode=1
+- Use multiple commands when the user says sequential things
 - Estimate delay_ms from natural language: "a few seconds" ≈ 3000, "then" ≈ 500, "after a moment" ≈ 1000
 """
 

@@ -480,6 +480,33 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             "set_track_color": lambda: bridge.set_track_color(
                 int(tool_args["track"]), str(tool_args["color"]),
             ),
+            "set_track_monitor": lambda: bridge.set_track_monitor(
+                int(tool_args["track"]), int(tool_args["mode"]),
+            ),
+            "set_track_auto_mode": lambda: bridge.set_track_auto_mode(
+                int(tool_args["track"]), str(tool_args["mode"]),
+            ),
+            "set_track_send_volume": lambda: bridge.set_track_send_volume(
+                int(tool_args["track"]), int(tool_args["send"]), float(tool_args["volume"]),
+            ),
+            "fx_next_preset": lambda: bridge.fx_next_preset(
+                int(tool_args["track"]), int(tool_args["fx"]),
+            ),
+            "fx_prev_preset": lambda: bridge.fx_prev_preset(
+                int(tool_args["track"]), int(tool_args["fx"]),
+            ),
+            "fx_set_wetdry": lambda: bridge.fx_set_wetdry(
+                int(tool_args["track"]), int(tool_args["fx"]), float(tool_args["value"]),
+            ),
+            "goto_marker": lambda: bridge.goto_marker(int(tool_args["marker"])),
+            "set_marker_name": lambda: bridge.set_marker_name(
+                int(tool_args["marker"]), str(tool_args["name"]),
+            ),
+            "set_loop_points": lambda: bridge.set_loop_points(
+                float(tool_args["start"]), float(tool_args["end"]),
+            ),
+            "undo": lambda: bridge.undo(),
+            "redo": lambda: bridge.redo(),
         }
 
         # Discovery tools (no bridge method to call, just return state)

@@ -288,6 +288,28 @@ class VoiceHotkey:
                 parts.append(f"T{track} vol → {vol}")
             elif tool == "insert_midi_pattern":
                 parts.append(f"MIDI {args.get('role', '?')}")
+            elif tool == "goto_marker":
+                parts.append(f"→ Marker {args.get('marker', '?')}")
+            elif tool == "set_marker_name":
+                parts.append(f"Marker {args.get('marker', '?')} → {args.get('name', '?')}")
+            elif tool == "fx_next_preset":
+                parts.append(f"T{args.get('track', '?')} FX preset →")
+            elif tool == "fx_set_wetdry":
+                parts.append(f"T{args.get('track', '?')} wet={args.get('value', '?')}")
+            elif tool == "undo":
+                parts.append("↩ Undo")
+            elif tool == "redo":
+                parts.append("↪ Redo")
+            elif tool == "set_loop_points":
+                parts.append(f"Loop {args.get('start', '?')}-{args.get('end', '?')}s")
+            elif tool == "set_track_auto_mode":
+                parts.append(f"T{args.get('track', '?')} auto={args.get('mode', '?')}")
+            elif tool == "set_track_send_volume":
+                parts.append(f"T{args.get('track', '?')}→S{args.get('send', '?')}")
+            elif tool == "set_track_monitor":
+                mode_names = {0: "off", 1: "on", 2: "tape"}
+                m = mode_names.get(args.get("mode", "?"), "?")
+                parts.append(f"T{args.get('track', '?')} monitor={m}")
             else:
                 parts.append(tool.replace("_", " ").title())
 

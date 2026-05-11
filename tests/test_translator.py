@@ -52,17 +52,19 @@ class TestTranslationResult:
 class TestToolSchemas:
     """Test TOOL_SCHEMAS has all expected tools."""
 
-    def test_all_23_tools_present(self):
+    def test_all_35_tools_present(self):
         expected = {
             "list_tracks", "get_transport", "get_daw_state", "get_track_count",
             "transport_control", "transport_seek",
             "set_track_volume", "set_track_mute", "set_track_solo", "set_track_pan",
             "set_master_volume", "set_master_pan",
-            "set_fx_param", "fx_bypass",
+            "set_fx_param", "fx_bypass", "fx_next_preset", "fx_prev_preset", "fx_set_wetdry",
             "trigger_action", "set_track_arm",
-            "toggle_repeat", "toggle_metronome",
+            "toggle_repeat", "toggle_metronome", "undo", "redo",
             "set_tempo", "insert_track", "rename_track",
             "insert_midi_pattern", "set_track_color",
+            "set_track_monitor", "set_track_auto_mode", "set_track_send_volume",
+            "goto_marker", "set_marker_name", "set_loop_points",
         }
         assert expected == set(TOOL_SCHEMAS.keys()), \
             f"Missing: {expected - set(TOOL_SCHEMAS.keys())}, Extra: {set(TOOL_SCHEMAS.keys()) - expected}"

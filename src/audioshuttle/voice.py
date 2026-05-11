@@ -54,6 +54,15 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         "fx_bypass": lambda: bridge.fx_bypass(
             int(args["track"]), int(args["fx"]), bool(args["bypass"]),
         ),
+        "fx_next_preset": lambda: bridge.fx_next_preset(
+            int(args["track"]), int(args["fx"]),
+        ),
+        "fx_prev_preset": lambda: bridge.fx_prev_preset(
+            int(args["track"]), int(args["fx"]),
+        ),
+        "fx_set_wetdry": lambda: bridge.fx_set_wetdry(
+            int(args["track"]), int(args["fx"]), float(args["value"]),
+        ),
         "trigger_action": lambda: bridge.trigger_action(
             int(args["command_id"])
         ),
@@ -62,6 +71,8 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         ),
         "toggle_repeat": lambda: bridge.toggle_repeat(),
         "toggle_metronome": lambda: bridge.toggle_metronome(),
+        "undo": lambda: bridge.undo(),
+        "redo": lambda: bridge.redo(),
         "set_tempo": lambda: bridge.set_tempo(float(args["bpm"])),
         "insert_track": lambda: bridge.insert_track(),
         "rename_track": lambda: bridge.rename_track(
@@ -72,6 +83,22 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         ),
         "set_track_color": lambda: bridge.set_track_color(
             int(args["track"]), str(args["color"]),
+        ),
+        "set_track_monitor": lambda: bridge.set_track_monitor(
+            int(args["track"]), int(args["mode"]),
+        ),
+        "set_track_auto_mode": lambda: bridge.set_track_auto_mode(
+            int(args["track"]), str(args["mode"]),
+        ),
+        "set_track_send_volume": lambda: bridge.set_track_send_volume(
+            int(args["track"]), int(args["send"]), float(args["volume"]),
+        ),
+        "goto_marker": lambda: bridge.goto_marker(int(args["marker"])),
+        "set_marker_name": lambda: bridge.set_marker_name(
+            int(args["marker"]), str(args["name"]),
+        ),
+        "set_loop_points": lambda: bridge.set_loop_points(
+            float(args["start"]), float(args["end"]),
         ),
     }
 
