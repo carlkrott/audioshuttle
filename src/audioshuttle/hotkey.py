@@ -243,18 +243,30 @@ class VoiceHotkey:
     @staticmethod
     def _result_summary(result: dict) -> str:
         """Create a short summary of the voice command result for the overlay."""
+        # If there's a state summary (from list_tracks/get_daw_state), show it
+        state_summary = result.get("state_summary")
+        if state_summary:
+            return f"📋 {state_summary}"
+
         commands = result.get("commands", [])
+
+        # Show transcription + what was done
+        heard = result.get("heard", "")
+        formatted = result.get("cleaned", "")
+
         if not commands:
-            text = result.get("cleaned", result.get("heard", ""))
+            text = formatted or heard
             if text:
-                return text[:60]
+                return f'"{text[:40]}" — no action'
             return "No command detected"
 
         parts = []
-        for cmd in commands[:3]:
+        for cmd in commands[:4]:
             tool = cmd.get("tool", "")
             args = cmd.get("args", {})
-            if tool == "set_tempo":
+            if tool in ("list_tracks", "get_daw_state", "get_transport", "get_track_count"):
+                continue  # Handled via state_summary above
+            elif tool == "set_tempo":
                 parts.append(f"BPM → {args.get('bpm', '?')}")
             elif tool == "transport_play":
                 parts.append("▶ Play")
@@ -262,6 +274,10 @@ class VoiceHotkey:
                 parts.append("■ Stop")
             elif tool == "insert_track":
                 parts.append("+ Track")
+            elif tool == "rename_track":
+                parts.append(f"T{args.get('track', '?')} → {args.get('name', '?')}")
+            elif tool == "set_track_color":
+                parts.append(f"T{args.get('track', '?')} {args.get('color', '?')}")
             elif tool == "set_track_mute":
                 track = args.get("track", "?")
                 mute = "Mute" if args.get("mute") else "Unmute"
@@ -276,8 +292,8 @@ class VoiceHotkey:
                 parts.append(tool.replace("_", " ").title())
 
         summary = " | ".join(parts)
-        if len(commands) > 3:
-            summary += f" +{len(commands) - 3} more"
+        if len(commands) > 4:
+            summary += f" +{len(commands) - 4} more"
         return summary
 
     @staticmethod

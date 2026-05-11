@@ -773,22 +773,88 @@ class ReaperOSC:
     # ── State discovery ─────────────────────────────────────────
 
     def refresh_state(self, wait: float = 0.5) -> DAWState:
-        """Probe Reaper for current state by requesting track info.
+        """Get current DAW state via the Lua watcher's state dump.
+
+        Writes a trigger file that the __startup.lua watcher detects.
+        The watcher dumps full track state (names, volumes, colors, etc.)
+        to /tmp/audioshuttle_daw_state.json, which we read back.
 
         Args:
-            wait: Seconds to wait for feedback responses (default 0.5s).
+            wait: Seconds to wait for the state dump (default 0.5s).
         """
-        # Send requests that trigger Reaper feedback
-        for i in range(1, 9):
-            self.send_command(f"/track/{i}/name")
-            self.send_command(f"/track/{i}/volume")
-            self.send_command(f"/track/{i}/mute")
-            self.send_command(f"/track/{i}/solo")
-            self.send_command(f"/track/{i}/pan")
-        self.send_command("/master/volume")
-        self.send_command("/master/pan")
-        self.send_command("/track/count")
-        time.sleep(wait)
+        import json
+        import glob
+
+        state_path = "/tmp/audioshuttle_daw_state.json"
+        trigger_path = "/tmp/audioshuttle_state_request"
+
+        # Remove stale state file
+        try:
+            os.remove(state_path)
+        except OSError:
+            pass
+
+        # Write trigger file for the watcher
+        try:
+            with open(trigger_path, "w") as f:
+                f.write("dump")
+            # Chown to Reaper user
+            for pid_dir in glob.glob("/proc/[0-9]*"):
+                try:
+                    with open(f"{pid_dir}/cmdline", "rb") as f:
+                        if b"REAPER/reaper" in f.read():
+                            stat = os.stat(f"{pid_dir}")
+                            os.chown(trigger_path, stat.st_uid, stat.st_gid)
+                            break
+                except (OSError, PermissionError):
+                    continue
+        except OSError as e:
+            logger.warning("Failed to write state trigger: %s", e)
+            return self._state
+
+        # Poll for the state dump (watcher checks every ~200ms)
+        import subprocess
+        for _ in range(int(wait / 0.05)):
+            if os.path.exists(state_path):
+                break
+            time.sleep(0.05)
+
+        # Read and parse the state dump
+        try:
+            with open(state_path, "r") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to read watcher state dump: %s", e)
+            return self._state
+
+        # Update internal state from dump
+        self._state.track_count = data.get("track_count", 0)
+
+        # Update tracks
+        existing = {t.track_number: t for t in self._state.tracks}
+        self._state.tracks.clear()
+        for td in data.get("tracks", []):
+            num = td["number"]
+            track = existing.get(num) or TrackState(track_number=num)
+            track.name = td.get("name", "")
+            track.volume = td.get("volume", 0.75)
+            track.pan = td.get("pan", 0.0)
+            track.mute = td.get("mute", False)
+            track.solo = td.get("solo", False)
+            self._state.tracks.append(track)
+        self._state.tracks.sort(key=lambda t: t.track_number)
+
+        # Update transport
+        transport = data.get("transport", {})
+        self._state.transport.playing = transport.get("playing", False)
+        self._state.transport.recording = transport.get("recording", False)
+        self._state.transport.position_seconds = transport.get("position", 0.0)
+        self._state.transport.tempo = transport.get("tempo", 120.0)
+
+        logger.info(
+            "State refreshed from watcher: %d tracks, tempo=%.0f",
+            len(self._state.tracks), self._state.transport.tempo,
+        )
         return self._state
 
     def get_track_count(self) -> int:

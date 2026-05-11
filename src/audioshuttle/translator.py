@@ -189,6 +189,13 @@ class IntentTranslator:
         """Use E2B model to translate command (potentially multi-command)."""
         state_desc = self._format_daw_state(daw_state)
 
+        # Debug: log what state the model receives
+        logger.info(
+            "Translating with DAW state: %d tracks, count=%d | state=%s",
+            len(daw_state.tracks), daw_state.track_count,
+            state_desc.replace('\n', ' | ')[:200],
+        )
+
         # Single user message with everything — Gemma E2B works best this way
         messages = [
             {
@@ -212,6 +219,7 @@ class IntentTranslator:
                 method="model",
             )]
 
+        logger.info("Model raw response: %s", raw[:500])
         return self._parse_response_multi(raw, method="model")
 
     def _translate_with_rules(

@@ -240,7 +240,31 @@ class VoicePipeline:
                     # - Verify MIDI imports have tracks to land on
                     sequenced = self._sequence_commands(commands)
 
-                    for i, cmd in enumerate(sequenced):
+                    # Handle discovery commands: replace with state summary
+                    discovery_tools = {"list_tracks", "get_daw_state", "get_transport", "get_track_count"}
+                    discovery_cmds = [c for c in sequenced if c["tool"] in discovery_tools]
+                    action_cmds = [c for c in sequenced if c["tool"] not in discovery_tools]
+
+                    # Build spoken state summary for discovery commands
+                    state_summary = None
+                    if discovery_cmds:
+                        state = self._bridge.state if hasattr(self._bridge, 'state') else DAWState()
+                        parts = []
+                        if state.tracks:
+                            for t in state.tracks:
+                                name = t.name or f"Track {t.track_number}"
+                                flags = []
+                                if t.mute: flags.append("muted")
+                                if t.solo: flags.append("solo")
+                                flag_str = f" ({', '.join(flags)})" if flags else ""
+                                parts.append(f"{name}{flag_str}")
+                        if not parts:
+                            parts.append(f"{state.track_count} tracks (names unknown)")
+                        state_summary = " | ".join(parts)
+                        logger.info("State summary for overlay: %s", state_summary)
+
+                    # Execute action commands (skip discovery ones)
+                    for i, cmd in enumerate(action_cmds):
                         # Delay between commands based on sequencing rules
                         if i > 0:
                             delay = cmd.get("_delay_ms", 0)
@@ -248,7 +272,7 @@ class VoicePipeline:
                                 await asyncio.sleep(delay / 1000.0)
                         logger.info(
                             "Executing command %d/%d: %s(%s)",
-                            i + 1, len(sequenced), cmd["tool"], cmd.get("args", {}),
+                            i + 1, len(action_cmds), cmd["tool"], cmd.get("args", {}),
                         )
                         result = _execute_tool(self._bridge, cmd["tool"], cmd.get("args", {}))
                         logger.info(
@@ -267,6 +291,7 @@ class VoicePipeline:
                         "command": commands[0],  # First command for backwards compat
                         "success": True,
                         "error": None,
+                        "state_summary": state_summary,  # Spoken state for overlay
                         "warning": "Reaper may be offline — commands sent but not confirmed" if not reaper_online else None,
                     }
                 except Exception as e:
