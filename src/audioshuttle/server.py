@@ -477,6 +477,9 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             "insert_midi_pattern": lambda: bridge.insert_midi_pattern(
                 str(tool_args.get("role", "drums")),
             ),
+            "set_track_color": lambda: bridge.set_track_color(
+                int(tool_args["track"]), str(tool_args["color"]),
+            ),
         }
 
         # Discovery tools (no bridge method to call, just return state)

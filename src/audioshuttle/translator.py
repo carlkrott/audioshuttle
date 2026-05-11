@@ -38,6 +38,7 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "insert_track": {},
     "rename_track": {"track": int, "name": str},
     "insert_midi_pattern": {"role": str},
+    "set_track_color": {"track": int, "color": str},
 }
 
 SYSTEM_PROMPT = """You translate natural language DAW commands into structured JSON tool calls.
@@ -79,20 +80,31 @@ Available tools:
 - set_tempo — args: {"bpm": float}
 - insert_track — args: {}
 - rename_track — args: {"track": int, "name": str}
+- set_track_color — args: {"track": int, "color": str} — hex color like "#ff0000" or named color like "red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"
 - insert_midi_pattern — args: {"role": str} — generates a 4-bar MIDI pattern and imports into Reaper.
   Roles: "drums" (kick/snare/hihat), "bass" (root notes), "chords" (C major pads)
   CRITICAL: Always pair with insert_track. The pattern needs a track to land on.
   Correct: [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
   The system auto-inserts a track if you forget, but explicit is better.
 
+TRACK NUMBERING FOR NEW TRACKS (CRITICAL):
+When inserting new tracks, they are added at the BOTTOM of the track list.
+If the DAW state shows N tracks, the FIRST insert_track creates track N+1,
+the SECOND creates track N+2, etc.
+Use the DAW state's track count to calculate the correct track numbers.
+Example: If DAW has 4 tracks and user says "add 2 tracks named guitar and bass":
+  [{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":5,"name":"guitar"}},{"tool":"rename_track","args":{"track":6,"name":"bass"}}]
+
 Multi-command examples:
   "add a drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
   "add 3 tracks and set tempo to 140" → [{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"set_tempo","args":{"bpm":140}}]
-  "add a bass track, name it bass, then play" → [{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":1,"name":"bass"}},{"tool":"insert_midi_pattern","args":{"role":"bass"}},{"tool":"transport_control","args":{"action":"play"}}]
+  "add a bass track and name it bass" (DAW has 3 tracks) → [{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":4,"name":"bass"}}]
   "add drums and mute track 3" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}},{"tool":"set_track_mute","args":{"track":3,"mute":true}}]
+  "add this sequence" or "import this midi" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
 
 Rules:
 - Match track NAMES to find track NUMBER from the DAW state
+- For NEW tracks: count existing tracks from DAW state, new tracks get N+1, N+2, etc.
 - "mute X" means mute=true, "unmute X" means mute=false
 - Volume: "turn up/increase" ≈ 0.85, "turn down/decrease" ≈ 0.5, "normal" ≈ 0.75
 - "down by N dB" ≈ subtract N*0.01 from current volume (rough approximation)

@@ -70,6 +70,9 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         "insert_midi_pattern": lambda: bridge.insert_midi_pattern(
             str(args.get("role", "drums")),
         ),
+        "set_track_color": lambda: bridge.set_track_color(
+            int(args["track"]), str(args["color"]),
+        ),
     }
 
     # Discovery tools — no bridge call needed

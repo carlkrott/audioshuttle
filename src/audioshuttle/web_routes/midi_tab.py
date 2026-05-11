@@ -96,35 +96,44 @@ async def midi_send(
 
     role = pattern.get("role", "drums")
 
-    # Send the user's description to the translator
-    combined_input = f"Set up a {role} track in the DAW. {description.strip()}"
+    # Build a prompt that tells the translator about the MIDI pattern context
+    combined_input = (
+        f"Add a new {role} track in the DAW and insert the {role} MIDI pattern onto it. "
+        f"{description.strip()}"
+    )
 
     try:
         from audioshuttle.models import DAWState
 
-        result = translator.translate(combined_input, DAWState())
-        if result.success and result.tool:
-            # Execute the tool on the bridge
-            from audioshuttle.voice import _execute_tool
-            try:
-                _execute_tool(bridge, result.tool, result.args)
-            except Exception:
-                pass
+        results = translator.translate_multi(combined_input, DAWState())
+
+        # Execute all commands in sequence
+        from audioshuttle.voice import _execute_tool
+        import asyncio
+
+        executed = []
+        for i, result in enumerate(results):
+            if result.success and result.tool:
+                try:
+                    # Small delay between commands (same as voice pipeline)
+                    if i > 0:
+                        import time
+                        time.sleep(0.3)
+                    _execute_tool(bridge, result.tool, result.args)
+                    executed.append(f"{result.tool}({result.args})")
+                except Exception as e:
+                    logger.warning("MIDI execute error for %s: %s", result.tool, e)
+
+        if executed:
             app.state.midi_send_result = {
                 "success": True,
-                "message": f"✓ {result.tool}({result.args}) — via {result.method}",
-                "command": result.tool,
+                "message": f"✓ {' → '.join(executed)}",
+                "command": executed[-1] if executed else None,
             }
         else:
-            # The E2B can't create tracks or set tempo — be honest about it
             app.state.midi_send_result = {
                 "success": False,
-                "message": (
-                    f"MIDI pattern generated for {role}. "
-                    f"Note: The current tool set doesn't support track creation or tempo changes — "
-                    f"create the track in Reaper, then use voice commands like 'mute track 1' or 'set volume'. "
-                    f"(E2B: {result.error or 'no matching tool'})"
-                ),
+                "message": f"Could not understand: {results[0].error if results else 'no response'}",
             }
     except Exception as e:
         logger.warning("MIDI send error: %s", e)

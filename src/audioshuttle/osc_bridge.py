@@ -671,6 +671,78 @@ class ReaperOSC:
             + (" (imported)" if imported else " (file saved, Reaper CLI not found)"),
         )
 
+    def set_track_color(self, track: int, color: str) -> CommandResult:
+        """Set a track's color in Reaper.
+
+        Writes a color command file for the __startup.lua watcher.
+        Reaper's OSC doesn't support track colors natively.
+
+        Args:
+            track: Track number (>= 1).
+            color: Hex color like "#ff0000" or named color.
+        """
+        if track < 1:
+            return CommandResult(
+                success=False,
+                address="/track/color",
+                error=f"Track must be >= 1, got {track}",
+            )
+
+        # Named color to hex mapping
+        named_colors = {
+            "red": "#ff0000", "blue": "#0044ff", "green": "#00cc00",
+            "yellow": "#ffcc00", "purple": "#9900ff", "orange": "#ff6600",
+            "pink": "#ff0099", "cyan": "#00cccc", "white": "#ffffff",
+            "grey": "#888888", "gray": "#888888",
+        }
+        hex_color = named_colors.get(color.lower().strip(), color)
+        if not hex_color.startswith("#"):
+            hex_color = "#" + hex_color
+
+        # Validate hex format
+        import re
+        if not re.match(r"^#[0-9a-fA-F]{6}$", hex_color):
+            return CommandResult(
+                success=False,
+                address="/track/color",
+                error=f"Invalid color format: {color}. Use hex (#ff0000) or named color.",
+            )
+
+        # Write color command file for watcher
+        import os
+        import glob
+        color_path = "/tmp/audioshuttle_color_cmd.txt"
+        try:
+            with open(color_path, "w") as f:
+                f.write(f"{track} {hex_color}")
+            # Chown to Reaper user (same as MIDI trigger pattern)
+            for pid_dir in glob.glob("/proc/[0-9]*"):
+                try:
+                    with open(f"{pid_dir}/cmdline", "rb") as f:
+                        if b"REAPER/reaper" in f.read():
+                            stat = os.stat(f"{pid_dir}")
+                            os.chown(color_path, stat.st_uid, stat.st_gid)
+                            break
+                except (OSError, PermissionError):
+                    continue
+        except OSError as e:
+            return CommandResult(
+                success=False,
+                address="/track/color",
+                error=f"Failed to write color command: {e}",
+            )
+
+        self._log_command(
+            f"set_track_color({track}, {hex_color})",
+            f"Color command written for track {track}",
+        )
+
+        return CommandResult(
+            success=True,
+            address="/track/color",
+            sent_value=f"track={track} color={hex_color}",
+        )
+
     # ── Track arm ────────────────────────────────────────────────
 
     def set_track_recarm(self, track: int, arm: bool) -> CommandResult:
