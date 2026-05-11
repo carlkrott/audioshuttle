@@ -829,16 +829,28 @@ class ReaperOSC:
     def set_track_monitor(self, track: int, mode: int) -> CommandResult:
         """Set track monitoring mode.
 
+        Uses Reaper actions to explicitly set the mode (more reliable than OSC).
+        Selects the track first, then triggers the monitor mode action.
+
         Args:
             track: Track number (>= 1).
             mode: 0=off, 1=normal, 2=not when playing (tape style).
         """
         if track < 1:
             return CommandResult(
-                success=False, address="/track/monitor",
+                success=False, address="/action",
                 error=f"Track must be >= 1, got {track}",
             )
-        return self.send_command(f"/track/{track}/monitor", mode)
+        action_map = {0: 40492, 1: 40493, 2: 40494}
+        action_id = action_map.get(mode)
+        if action_id is None:
+            return CommandResult(
+                success=False, address="/action",
+                error=f"Mode must be 0, 1, or 2, got {mode}",
+            )
+        # Select the track first, then trigger the action
+        self.select_track(track)
+        return self.send_command(f"/action/{action_id}")
 
     # ── Track sends ───────────────────────────────────────────────
 
@@ -863,29 +875,34 @@ class ReaperOSC:
     def set_track_auto_mode(self, track: int, mode: str) -> CommandResult:
         """Set track automation mode.
 
+        Uses Reaper actions (not OSC toggles) to explicitly set the mode.
+        Selects the track first, then triggers the automation mode action.
+
         Args:
             track: Track number (>= 1).
             mode: One of 'trim', 'read', 'latch', 'touch', 'write'.
         """
         if track < 1:
             return CommandResult(
-                success=False, address="/track/auto",
+                success=False, address="/action",
                 error=f"Track must be >= 1, got {track}",
             )
-        mode_map = {
-            "trim": f"/track/{track}/autotrim",
-            "read": f"/track/{track}/autoread",
-            "latch": f"/track/{track}/autolatch",
-            "touch": f"/track/{track}/autotouch",
-            "write": f"/track/{track}/autowrite",
+        action_map = {
+            "trim": 40452,
+            "read": 40453,
+            "latch": 40454,
+            "touch": 40455,
+            "write": 40456,
         }
-        addr = mode_map.get(mode.lower())
-        if not addr:
+        action_id = action_map.get(mode.lower())
+        if not action_id:
             return CommandResult(
-                success=False, address="/track/auto",
+                success=False, address="/action",
                 error=f"Unknown auto mode: {mode}. Use: trim, read, latch, touch, write",
             )
-        return self.send_command(addr)
+        # Select the track first, then trigger the action
+        self.select_track(track)
+        return self.send_command(f"/action/{action_id}")
 
     # ── FX extended ───────────────────────────────────────────────
 

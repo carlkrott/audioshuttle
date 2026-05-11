@@ -146,10 +146,42 @@ Multi-command examples:
   "go to marker 2 and name it chorus" → [{"tool":"goto_marker","args":{"marker":2}},{"tool":"set_marker_name","args":{"marker":2,"name":"chorus"}}]
   "arm track 1 for recording and set input monitoring" → [{"tool":"set_track_arm","args":{"track":1,"arm":true}},{"tool":"set_track_monitor","args":{"track":1,"mode":1}}]
   "more reverb on track 2" → [{"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.8}}]
+  "less reverb on track 2" → [{"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.2}}]
   "try the next preset on the guitar" → [{"tool":"fx_next_preset","args":{"track":3,"fx":0}}]
+  "previous preset on track 2" → [{"tool":"fx_prev_preset","args":{"track":2,"fx":0}}]
   "undo that" → [{"tool":"undo","args":{}}]
+  "redo" → [{"tool":"redo","args":{}}]
   "loop from 10 to 30 seconds" → [{"tool":"set_loop_points","args":{"start":10.0,"end":30.0}}]
   "set up for recording: arm track 1, monitor on, click track on, record" → [{"tool":"set_track_arm","args":{"track":1,"arm":true}},{"tool":"set_track_monitor","args":{"track":1,"mode":1}},{"tool":"toggle_metronome","args":{}},{"tool":"transport_control","args":{"action":"record"}}]
+  "put track 3 in write mode" → [{"tool":"set_track_auto_mode","args":{"track":3,"mode":"write"}}]
+  "set guitar to latch mode" (guitar is track 3) → [{"tool":"set_track_auto_mode","args":{"track":3,"mode":"latch"}}]
+  "change automation to touch on track 2" → [{"tool":"set_track_auto_mode","args":{"track":2,"mode":"touch"}}]
+  "send track 1 to track 3" → [{"tool":"set_track_send_volume","args":{"track":1,"send":0,"volume":1.0}}]
+  "set the send level from guitar to drums lower" (guitar=3, drums=4) → [{"tool":"set_track_send_volume","args":{"track":3,"send":0,"volume":0.3}}]
+  "turn on input monitoring for track 1" → [{"tool":"set_track_monitor","args":{"track":1,"mode":1}}]
+  "turn off monitoring on track 2" → [{"tool":"set_track_monitor","args":{"track":2,"mode":0}}]
+
+Keyword-to-tool mapping (CRITICAL — use these mappings):
+  "write mode" / "write automation" / "automation write" → set_track_auto_mode mode="write"
+  "latch mode" / "latch automation" → set_track_auto_mode mode="latch"
+  "touch mode" / "touch automation" → set_track_auto_mode mode="touch"
+  "read mode" / "read automation" → set_track_auto_mode mode="read"
+  "trim mode" / "trim automation" → set_track_auto_mode mode="trim"
+  "monitoring on" / "input monitoring" / "monitor on" → set_track_monitor mode=1
+  "monitoring off" / "monitor off" → set_track_monitor mode=0
+  "tape monitoring" / "tape mode monitoring" → set_track_monitor mode=2
+  "loop from X to Y" / "set loop" → set_loop_points
+  "more reverb/delay/echo/effect" → fx_set_wetdry (higher value)
+  "less reverb/delay/echo/effect" → fx_set_wetdry (lower value)
+  "dry" / "no effect" → fx_set_wetdry value=0.0
+  "fully wet" / "100 percent wet" → fx_set_wetdry value=1.0
+  "next preset" → fx_next_preset
+  "previous preset" / "prev preset" → fx_prev_preset
+  "send X to Y" / "routing" → set_track_send_volume
+  "undo" → undo
+  "redo" → redo
+  "go to marker" / "jump to marker" → goto_marker
+  "name marker" / "rename marker" → set_marker_name
 
 Rules:
 - Match track NAMES to find track NUMBER from the DAW state
