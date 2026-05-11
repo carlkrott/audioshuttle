@@ -79,9 +79,17 @@ Available tools:
 - set_tempo — args: {"bpm": float}
 - insert_track — args: {}
 - rename_track — args: {"track": int, "name": str}
-- insert_midi_pattern — args: {"role": str} — generates a 4-bar MIDI pattern.
-  ALWAYS pair with insert_track when user says "drums track", "drum beat", "bass line", etc.
-  Example: "add a drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
+- insert_midi_pattern — args: {"role": str} — generates a 4-bar MIDI pattern and imports into Reaper.
+  Roles: "drums" (kick/snare/hihat), "bass" (root notes), "chords" (C major pads)
+  CRITICAL: Always pair with insert_track. The pattern needs a track to land on.
+  Correct: [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
+  The system auto-inserts a track if you forget, but explicit is better.
+
+Multi-command examples:
+  "add a drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
+  "add 3 tracks and set tempo to 140" → [{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"set_tempo","args":{"bpm":140}}]
+  "add a bass track, name it bass, then play" → [{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":1,"name":"bass"}},{"tool":"insert_midi_pattern","args":{"role":"bass"}},{"tool":"transport_control","args":{"action":"play"}}]
+  "add drums and mute track 3" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}},{"tool":"set_track_mute","args":{"track":3,"mute":true}}]
 
 Rules:
 - Match track NAMES to find track NUMBER from the DAW state

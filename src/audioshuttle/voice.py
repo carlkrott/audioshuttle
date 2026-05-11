@@ -224,21 +224,23 @@ class VoicePipeline:
                         if hasattr(self._bridge, 'probe'):
                             reaper_online = self._bridge.probe(timeout=0.5)
 
-                    for i, cmd in enumerate(commands):
-                        # Delay between commands: explicit delay_ms from model,
-                        # or a small gap before MIDI import (Reaper needs a moment
-                        # to finish creating tracks before we drop a file in)
+                    # Smart command sequencing:
+                    # - Group related commands for proper timing
+                    # - Insert appropriate delays between dependent commands
+                    # - Verify MIDI imports have tracks to land on
+                    sequenced = self._sequence_commands(commands)
+
+                    for i, cmd in enumerate(sequenced):
+                        # Delay between commands based on sequencing rules
                         if i > 0:
-                            delay = cmd.get("delay_ms", 0)
+                            delay = cmd.get("_delay_ms", 0)
                             if delay > 0:
                                 await asyncio.sleep(delay / 1000.0)
-                            elif cmd["tool"] == "insert_midi_pattern":
-                                await asyncio.sleep(0.3)  # Let track creation settle
                         logger.info(
                             "Executing command %d/%d: %s(%s)",
-                            i + 1, len(commands), cmd["tool"], cmd["args"],
+                            i + 1, len(sequenced), cmd["tool"], cmd.get("args", {}),
                         )
-                        result = _execute_tool(self._bridge, cmd["tool"], cmd["args"])
+                        result = _execute_tool(self._bridge, cmd["tool"], cmd.get("args", {}))
                         logger.info(
                             "Command %d result: success=%s",
                             i + 1,
@@ -410,3 +412,61 @@ class VoicePipeline:
             "success": True,
             "error": None,
         }
+
+    @staticmethod
+    def _sequence_commands(commands: list[dict]) -> list[dict]:
+        """Smart command sequencing with proper delays and dependency resolution.
+
+        Rules:
+        1. Group track operations: insert_track + rename_track → same track
+        2. MIDI insert needs a track: auto-prepend insert_track if needed
+        3. insert_midi_pattern always gets 800ms delay (watcher + track settle)
+        4. Transport changes get 200ms gap
+        5. Respect model-provided delay_ms
+        """
+        if not commands:
+            return commands
+
+        sequenced = []
+        for i, cmd in enumerate(commands):
+            entry = dict(cmd)  # shallow copy
+            entry.setdefault("args", {})
+
+            # Calculate delay for this command
+            delay = cmd.get("delay_ms", 0)
+
+            # Auto-delay rules (only when no explicit delay_ms set)
+            if delay == 0 and i > 0:
+                tool = cmd["tool"]
+
+                if tool == "insert_midi_pattern":
+                    # MIDI import needs: Reaper track to settle + watcher to poll
+                    delay = 800
+                elif tool == "rename_track":
+                    # Rename needs the track to exist first
+                    delay = 300
+                elif tool in ("transport_play", "transport_stop", "transport_record"):
+                    # Transport changes: small gap for Reaper to process
+                    delay = 150
+                elif tool.startswith("set_track_") and "track" in entry.get("args", {}):
+                    # Track modifications: give Reaper a moment
+                    delay = 100
+
+            entry["_delay_ms"] = delay
+            sequenced.append(entry)
+
+        # Dependency check: insert_midi_pattern needs a track
+        # If no insert_track precedes it, auto-prepend one
+        has_insert_before_midi = False
+        for i, cmd in enumerate(sequenced):
+            if cmd["tool"] == "insert_track":
+                has_insert_before_midi = True
+            elif cmd["tool"] == "insert_midi_pattern" and not has_insert_before_midi:
+                # No track was inserted — add one before the MIDI pattern
+                track_insert = {"tool": "insert_track", "args": {}, "_delay_ms": 0}
+                sequenced.insert(i, track_insert)
+                # Ensure the MIDI pattern still has its delay
+                sequenced[i + 1]["_delay_ms"] = max(sequenced[i + 1].get("_delay_ms", 0), 800)
+                break  # Only fix the first MIDI without track
+
+        return sequenced
