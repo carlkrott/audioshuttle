@@ -186,7 +186,14 @@ class VoicePipeline:
             if self._translator:
                 try:
                     from audioshuttle.models import DAWState
-                    results = self._translator.translate_multi(final_text, DAWState())
+                    # Get live DAW state for context (track names, count, etc.)
+                    daw_state = DAWState()
+                    if self._bridge and hasattr(self._bridge, 'refresh_state'):
+                        try:
+                            daw_state = self._bridge.refresh_state(wait=0.3)
+                        except Exception as e:
+                            logger.warning("State refresh failed, using empty state: %s", e)
+                    results = self._translator.translate_multi(final_text, daw_state)
                     for r in results:
                         if r.success:
                             commands.append({
@@ -356,7 +363,14 @@ class VoicePipeline:
         if self._translator:
             try:
                 from audioshuttle.models import DAWState
-                results = self._translator.translate_multi(final_text, DAWState())
+                # Get live DAW state for context
+                daw_state = DAWState()
+                if self._bridge and hasattr(self._bridge, 'refresh_state'):
+                    try:
+                        daw_state = self._bridge.refresh_state(wait=0.3)
+                    except Exception as e:
+                        logger.warning("State refresh failed, using empty state: %s", e)
+                results = self._translator.translate_multi(final_text, daw_state)
                 for r in results:
                     if r.success:
                         commands.append({

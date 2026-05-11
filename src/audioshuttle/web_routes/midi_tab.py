@@ -105,7 +105,14 @@ async def midi_send(
     try:
         from audioshuttle.models import DAWState
 
-        results = translator.translate_multi(combined_input, DAWState())
+        # Get live DAW state for context
+        daw_state = DAWState()
+        if bridge and hasattr(bridge, 'refresh_state'):
+            try:
+                daw_state = bridge.refresh_state(wait=0.3)
+            except Exception:
+                pass
+        results = translator.translate_multi(combined_input, daw_state)
 
         # Execute all commands in sequence
         from audioshuttle.voice import _execute_tool

@@ -180,7 +180,14 @@ async def replay_command(request: Request, cmd: str = ""):
         if translator:
             from audioshuttle.models import DAWState
 
+            # Get live DAW state for context
+            bridge = getattr(app.state, "bridge", None)
             daw_state = DAWState()
+            if bridge and hasattr(bridge, 'refresh_state'):
+                try:
+                    daw_state = bridge.refresh_state(wait=0.3)
+                except Exception:
+                    pass
             result = translator.translate(cmd, daw_state)
             if result.success and result.tool:
                 record_command(cmd, result.tool, True)
