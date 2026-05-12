@@ -166,6 +166,7 @@ class VoicePipeline:
 
             try:
                 raw_text = self._stt.transcribe(tmp_path)
+                logger.info("Whisper transcription: %r", raw_text)
             except Exception as e:
                 return {
                     "transcription": None,
@@ -202,6 +203,8 @@ class VoicePipeline:
                     }
                 try:
                     formatted = await self._format_text(raw_text)
+                    if formatted != raw_text:
+                        logger.info("Formatted: %r → %r", raw_text, formatted)
                     final_text = formatted
                 except Exception as e:
                     logger.warning("Formatting failed, using raw text: %s", e)
@@ -352,15 +355,46 @@ class VoicePipeline:
     async def _format_text(self, raw_text: str) -> str:
         """Clean up voice transcription via E2B model.
 
-        Light normalization: remove fillers, fix false starts, normalize language.
+        Contextual correction: fix DAW-specific mishearings, remove fillers,
+        resolve ambiguity. The model knows the DAW domain vocabulary.
         Does NOT convert to OSC or interpret the command.
         """
         import re
 
         prompt = (
-            "Clean up this voice transcription. Remove filler words (um, uh, like), "
-            "fix false starts. Output ONLY the cleaned sentence, nothing else.\n\n"
-            f'Raw: "{raw_text}"'
+            "You are correcting a voice transcription for a DAW control system. "
+            "Fix common speech recognition errors for music production terms.\n\n"
+            "Common mishearings to fix:\n"
+            "- 'disarm' might be heard as 'this arm', 'the star', 'des arm', 'this are' → correct to 'disarm'\n"
+            "- 'unmute' might be heard as 'on mute', 'un mood' → correct to 'unmute'\n"
+            "- 'solo' might be heard as 'so low', 'sow low' → correct to 'solo'\n"
+            "- 'un-solo' or 'clear solo' → 'un-solo'\n"
+            "- 'pan' might be heard as 'pen', 'pun' → correct to 'pan'\n"
+            "- 'bass' might be heard as 'base', 'face' → correct to 'bass'\n"
+            "- 'mute' might be heard as 'mood', 'newt', 'moot' → correct to 'mute'\n"
+            "- 'track' might be heard as 'truck', 'trac' → correct to 'track'\n"
+            "- 'volume' might be heard as 'volum', 'volumn' → correct to 'volume'\n"
+            "- 'tempo' might be heard as 'temple', 'temp oh' → correct to 'tempo'\n"
+            "- 'metronome' might be heard as 'metrome', 'metro' → correct to 'metronome'\n"
+            "- 'record' might be heard as 'recorder', 'recording' → keep context\n"
+            "- 'loop' might be heard as 'loupe', 'lute' → correct to 'loop'\n"
+            "- 'marker' might be heard as 'mark her', 'marquee' → correct to 'marker'\n"
+            "- 'preset' might be heard as 'pre set', 'preeset' → correct to 'preset'\n"
+            "- 'monitor' might be heard as 'monitored', 'monument' → correct to 'monitor'\n"
+            "- 'automation' or 'auto mode' might be heard as 'ought a mission' → correct to 'automation'\n"
+            "- 'write mode' might be heard as 'right mode', 'ride mode' → correct to 'write mode'\n"
+            "- 'latch mode' might be heard as 'lack mode', 'launch mode' → correct to 'latch mode'\n"
+            "- 'touch mode' might be heard as 'much mode' → correct to 'touch mode'\n"
+            "- 'reverb' might be heard as 'reeve erb' → correct to 'reverb'\n"
+            "- 'send' (routing) might be heard as 'said', 'sand' → correct to 'send'\n"
+            "- 'undo' might be heard as 'undue', 'on do' → correct to 'undo'\n"
+            "- 'redo' might be heard as 'read o', 'reed o' → correct to 'redo'\n"
+            "- 'rename' might be heard as 're name', 'rain ame' → correct to 'rename'\n"
+            "- 'colour'/'color' → normalize to 'colour' or 'color' (both accepted)\n"
+            "- Remove filler words: um, uh, like, you know, basically\n"
+            "- Fix false starts (repeated words at the beginning)\n\n"
+            f'Raw transcription: "{raw_text}"\n\n'
+            "Output ONLY the corrected sentence. No quotes, no explanation."
         )
         result = self._model_server.chat(
             [{"role": "user", "content": prompt}],
