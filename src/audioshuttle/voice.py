@@ -361,62 +361,77 @@ class VoicePipeline:
         """
         import re
 
+        # Build context about current DAW state for disambiguation
+        state_context = ""
+        if self._bridge and hasattr(self._bridge, 'state'):
+            state = self._bridge.state
+            if state.tracks:
+                track_names = [f"T{t.track_number}={t.name or 'unnamed'}" for t in state.tracks[:8]]
+                state_context = f"\nCurrent tracks: {', '.join(track_names)}"
+
         prompt = (
-            "You are correcting a voice transcription for a DAW control system. "
-            "Fix common speech recognition errors for music production terms.\n\n"
-            "Common mishearings to fix:\n"
-            "- 'disarm' might be heard as 'this arm', 'the star', 'des arm', 'this are' → correct to 'disarm'\n"
-            "- 'unmute' might be heard as 'on mute', 'un mood' → correct to 'unmute'\n"
-            "- 'solo' might be heard as 'so low', 'sow low' → correct to 'solo'\n"
-            "- 'un-solo' or 'clear solo' → 'un-solo'\n"
-            "- 'pan' might be heard as 'pen', 'pun' → correct to 'pan'\n"
-            "- 'bass' might be heard as 'base', 'face' → correct to 'bass'\n"
-            "- 'mute' might be heard as 'mood', 'newt', 'moot' → correct to 'mute'\n"
-            "- 'track' might be heard as 'truck', 'trac' → correct to 'track'\n"
-            "- 'volume' might be heard as 'volum', 'volumn' → correct to 'volume'\n"
-            "- 'tempo' might be heard as 'temple', 'temp oh' → correct to 'tempo'\n"
-            "- 'metronome' might be heard as 'metrome', 'metro' → correct to 'metronome'\n"
-            "- 'record' might be heard as 'recorder', 'recording' → keep context\n"
-            "- 'loop' might be heard as 'loupe', 'lute' → correct to 'loop'\n"
-            "- 'marker' might be heard as 'mark her', 'marquee' → correct to 'marker'\n"
-            "- 'preset' might be heard as 'pre set', 'preeset' → correct to 'preset'\n"
-            "- 'monitor' might be heard as 'monitored', 'monument' → correct to 'monitor'\n"
-            "- 'automation' or 'auto mode' might be heard as 'ought a mission' → correct to 'automation'\n"
-            "- 'write mode' might be heard as 'right mode', 'ride mode' → correct to 'write mode'\n"
-            "- 'latch mode' might be heard as 'lack mode', 'launch mode' → correct to 'latch mode'\n"
-            "- 'touch mode' might be heard as 'much mode' → correct to 'touch mode'\n"
-            "- 'reverb' might be heard as 'reeve erb' → correct to 'reverb'\n"
-            "- 'send' (routing) might be heard as 'said', 'sand' → correct to 'send'\n"
-            "- 'undo' might be heard as 'undue', 'on do' → correct to 'undo'\n"
-            "- 'redo' might be heard as 'read o', 'reed o' → correct to 'redo'\n"
-            "- 'rename' might be heard as 're name', 'rain ame' → correct to 'rename'\n"
-            "- 'colour'/'color' → normalize to 'colour' or 'color' (both accepted)\n"
-            "- Remove filler words: um, uh, like, you know, basically\n"
-            "- Fix false starts (repeated words at the beginning)\n\n"
-            f'Raw transcription: "{raw_text}"\n\n'
-            "Output ONLY the corrected sentence. No quotes, no explanation."
+            "Fix DAW voice transcription errors. Output ONLY the corrected sentence.\n"
+            "Fixes: moved→mute, right mode→write mode, this arm→disarm, "
+            "charge→arm, going to charge→arm, base→bass, so low→solo, "
+            "on mute→unmute, mood→mute, ride mode→latch mode, much mode→touch mode, "
+            "temple→tempo, mark her→marker, pre set→preset, monument→monitor, "
+            "ought a mission→automation, reeve erb→reverb, on do→undo, "
+            "rain ame→rename, loupe→loop, truck→track, "
+            "won't→1 (when after 'track'), oh I'm→arm, going to→(remove).\n"
+            "Use track names from context if the transcription says 'guitar' or 'drums'.\n"
+            f"{state_context}\n\n"
+            f"Raw: '{raw_text}'"
         )
         result = self._model_server.chat(
             [{"role": "user", "content": prompt}],
-            max_tokens=128,
-        )
+            max_tokens=512,        )
         if not result:
             return raw_text
 
         cleaned = result.strip()
 
-        # Detect E2B thinking leak — any numbered step, markdown, or structured output
-        # means the model put reasoning in content instead of the actual answer
-        if re.match(r'^\d+[\.\)]\s', cleaned):
-            # Numbered step leaked through — fall back to raw
-            return raw_text
+        # E2B thinking mode: the actual answer is often at the very end
+        # of reasoning_content, after all the "Thinking Process:" steps.
+        # Try to extract the final line that looks like the corrected sentence.
+        if 'Thinking Process' in cleaned or cleaned.startswith('1.') or cleaned.startswith('Step'):
+            # The model put reasoning in content — extract the last meaningful line
+            lines = [l.strip() for l in cleaned.split('\n') if l.strip()]
+            # Look for lines that look like actual transcribed sentences
+            # (not reasoning steps, not bullet points, not explanations)
+            candidates = []
+            for line in lines:
+                # Skip reasoning artifacts
+                if any(line.lower().startswith(p) for p in (
+                    'thinking', 'step', 'analyze', 'however', 'overall',
+                    'given', 'based on', 'finally', 'therefore', 'i would',
+                    'note:', 'the ', 'this is', 'original:', 'correction:',
+                    'result:', 'output:', 'draft', 'review',
+                )):
+                    continue
+                # Skip lines starting with * (bullet points)
+                if line.startswith('*'):
+                    continue
+                # Skip lines that look like numbered steps
+                if re.match(r'^\d+[\.\)]\s', line):
+                    continue
+                # Skip markdown
+                if line.startswith('#') or line.startswith('```') or line.startswith('**'):
+                    continue
+                # Skip very short fragments
+                if len(line) < 5:
+                    continue
+                # Skip lines that are just arrow mappings
+                if '→' in line or '->' in line:
+                    continue
+                candidates.append(line)
 
-        # Detect markdown formatting (thinking output uses bold, headers, etc.)
+            if candidates:
+                cleaned = candidates[-1]
+            else:
+                return raw_text
+
+        # Detect markdown formatting
         if '**' in cleaned or cleaned.startswith('#') or cleaned.startswith('```'):
-            return raw_text
-
-        # Detect thinking keywords
-        if any(kw in cleaned.lower() for kw in ('thinking process', 'step ', 'analysis', 'reasoning')):
             return raw_text
 
         # If suspiciously long for a cleaned sentence, fall back

@@ -106,7 +106,14 @@ class STTEngine:
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
         model = self._load_model()
-        segments, info = model.transcribe(audio_path, beam_size=5)
+        segments, info = model.transcribe(
+            audio_path,
+            beam_size=5,
+            language="en",  # Force English for DAW commands
+            no_speech_threshold=0.6,  # Filter out non-speech
+            condition_on_previous_text=False,  # Each utterance is independent
+            hotwords="DAW command: mute solo arm record play stop track volume tempo",
+        )
         text = " ".join(segment.text.strip() for segment in segments)
         logger.debug(
             "Transcribed '%s' (%.1fs): %s",
