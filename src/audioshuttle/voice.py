@@ -122,6 +122,30 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         "set_plugin_preset": lambda: bridge.set_plugin_preset(
             int(args["track"]), int(args["fx"]), str(args["preset_name"]),
         ),
+        "get_plugin_params": lambda: bridge.get_plugin_params(
+            int(args["track"]), int(args["fx"]),
+        ),
+        # Routing
+        "create_send": lambda: bridge.create_send(
+            int(args["source_track"]), int(args["dest_track"]),
+        ),
+        "delete_send": lambda: bridge.delete_send(
+            int(args["track"]), int(args["send"]),
+        ),
+        # Track extras
+        "set_track_input": lambda: bridge.set_track_input(
+            int(args["track"]), int(args["input_code"]),
+        ),
+        "select_track": lambda: bridge.select_track(int(args["track"])),
+        "move_track": lambda: bridge.move_track(
+            int(args["track"]), int(args["new_position"]),
+        ),
+        # Playback extras
+        "set_playrate": lambda: bridge.set_playrate(float(args["rate"])),
+        "solo_reset": lambda: bridge.solo_reset(),
+        "open_fx_ui": lambda: bridge.open_fx_ui(
+            int(args["track"]), int(args["fx"]),
+        ),
     }
 
     # Discovery tools — no bridge call needed

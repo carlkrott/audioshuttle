@@ -59,6 +59,18 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "load_plugin": {"track": int, "plugin_name": str},
     "remove_plugin": {"track": int, "fx": int},
     "set_plugin_preset": {"track": int, "fx": int, "preset_name": str},
+    "get_plugin_params": {"track": int, "fx": int},
+    # Routing
+    "create_send": {"source_track": int, "dest_track": int},
+    "delete_send": {"track": int, "send": int},
+    # Track management extras
+    "set_track_input": {"track": int, "input_code": int},
+    "select_track": {"track": int},
+    "move_track": {"track": int, "new_position": int},
+    # Playback extras
+    "set_playrate": {"rate": float},
+    "solo_reset": {},
+    "open_fx_ui": {"track": int, "fx": int},
     # Markers
     "goto_marker": {"marker": int},
     "set_marker_name": {"marker": int, "name": str},
@@ -98,6 +110,15 @@ Tools:
 - load_plugin: {"track": int, "plugin_name": str} — load VST/JSFX plugin by name. Instruments: ReaSynth, ReaSynDr, ReaSamplOmatic5000. Effects: ReaEQ, ReaComp, ReaDelay, ReaVerb, ReaGate, ReaLimit, ReaPitch, etc. JSFX: "JS: Delay", "JS: Chorus", "JS: Distortion", "JS: MIDI Arpeggiator", etc.
 - remove_plugin: {"track": int, "fx": int} — remove plugin by FX index
 - set_plugin_preset: {"track": int, "fx": int, "preset_name": str}
+- get_plugin_params: {"track": int, "fx": int} — dump all params with names/values. USE before set_fx_param to discover what to set.
+- create_send: {"source_track": int, "dest_track": int} — route audio from one track to another
+- delete_send: {"track": int, "send": int} — remove a send
+- set_track_input: {"track": int, "input_code": int} — set recording input. -1=none, 0=MIDI, 256=mono input 1, 6400=stereo input 1
+- select_track: {"track": int}
+- move_track: {"track": int, "new_position": int}
+- set_playrate: {"rate": float} — playback speed (1.0=normal, changes pitch)
+- solo_reset: {} — unsolo all tracks
+- open_fx_ui: {"track": int, "fx": int} — show plugin window
 - goto_marker: {"marker": int}
 - set_marker_name: {"marker": int, "name": str}
 - set_loop_points: {"start": float, "end": float}

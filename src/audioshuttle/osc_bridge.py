@@ -1666,6 +1666,271 @@ class ReaperOSC:
             reaper_feedback="\n".join(lines),
         )
 
+    def _lua_trigger(
+        self, trigger_path: str, result_path: str,
+        content: str, wait: float = 1.0,
+    ) -> dict | None:
+        """Generic Lua watcher trigger: write content, wait for JSON result."""
+        import json as _json
+        import glob as _glob
+        import time
+
+        try:
+            os.remove(result_path)
+        except OSError:
+            pass
+
+        with open(trigger_path, "w") as f:
+            f.write(content)
+
+        # Chown to Reaper user
+        for pid_dir in _glob.glob("/proc/[0-9]*"):
+            try:
+                with open(f"{pid_dir}/cmdline", "rb") as pf:
+                    if b"REAPER/reaper" in pf.read():
+                        stat = os.stat(f"{pid_dir}")
+                        os.chown(trigger_path, stat.st_uid, stat.st_gid)
+                        break
+            except (OSError, PermissionError):
+                continue
+
+        for _ in range(int(wait * 10)):
+            time.sleep(0.1)
+            if os.path.exists(result_path):
+                try:
+                    with open(result_path) as rf:
+                        result = _json.load(rf)
+                    os.remove(result_path)
+                    return result
+                except (OSError, ValueError):
+                    pass
+
+        return None
+
+    # ── Plugin parameter discovery ──────────────────────────────────
+
+    def get_plugin_params(
+        self, track: int, fx: int,
+    ) -> CommandResult:
+        """Dump all parameters for a plugin, with names, values, and ranges.
+
+        This is the key tool that makes set_fx_param useful — the model can
+        discover what parameters exist and what to set.
+
+        Args:
+            track: Track number (>= 1).
+            fx: FX index on the track (0-based).
+        """
+        if track < 1 or fx < 0:
+            return CommandResult(
+                success=False, address="/fx/params",
+                error=f"Invalid track={track} or fx={fx}",
+            )
+
+        result = self._lua_trigger(
+            "/tmp/audioshuttle_fx_params_request",
+            "/tmp/audioshuttle_fx_params.json",
+            f"{track}:{fx}",
+        )
+
+        if not result:
+            return CommandResult(
+                success=False, address="/fx/params",
+                error="Timeout querying plugin parameters",
+            )
+
+        if result.get("success"):
+            params = result.get("params", [])
+            fx_name = result.get("fx_name", "Unknown")
+            lines = [f"{fx_name} (Track {track} FX#{fx}) — {len(params)} params:"]
+            for p in params:
+                display = p.get("display", "")
+                display_str = f" [{display}]" if display else ""
+                lines.append(
+                    f"  #{p['i']}: {p['name']} = {p['value']:.3f}{display_str}"
+                )
+            return CommandResult(
+                success=True, address="/fx/params",
+                reaper_feedback="\n".join(lines),
+            )
+        else:
+            return CommandResult(
+                success=False, address="/fx/params",
+                error=result.get("error", "Failed to get params"),
+            )
+
+    # ── Track routing (sends) ───────────────────────────────────────
+
+    def create_send(
+        self, source_track: int, dest_track: int,
+    ) -> CommandResult:
+        """Create an audio send from one track to another.
+
+        Args:
+            source_track: Source track number (>= 1).
+            dest_track: Destination track number (>= 1).
+        """
+        if source_track < 1 or dest_track < 1:
+            return CommandResult(
+                success=False, address="/routing/send",
+                error=f"Invalid source={source_track} or dest={dest_track}",
+            )
+
+        result = self._lua_trigger(
+            "/tmp/audioshuttle_routing_trigger",
+            "/tmp/audioshuttle_routing_result.json",
+            f"create_send:{source_track}:{dest_track}",
+        )
+
+        if result and result.get("success"):
+            return CommandResult(
+                success=True, address="/routing/send",
+                reaper_feedback=f"Send created: Track {source_track} → Track {dest_track}",
+            )
+        return CommandResult(
+            success=False, address="/routing/send",
+            error=(result or {}).get("error", "Failed to create send"),
+        )
+
+    def delete_send(
+        self, track: int, send: int,
+    ) -> CommandResult:
+        """Remove an audio send from a track.
+
+        Args:
+            track: Track number (>= 1).
+            send: Send index (0-based).
+        """
+        if track < 1 or send < 0:
+            return CommandResult(
+                success=False, address="/routing/send",
+                error=f"Invalid track={track} or send={send}",
+            )
+
+        result = self._lua_trigger(
+            "/tmp/audioshuttle_routing_trigger",
+            "/tmp/audioshuttle_routing_result.json",
+            f"delete_send:{track}:{send}",
+        )
+
+        if result and result.get("success"):
+            return CommandResult(
+                success=True, address="/routing/send",
+                reaper_feedback=f"Removed send #{send} from track {track}",
+            )
+        return CommandResult(
+            success=False, address="/routing/send",
+            error=(result or {}).get("error", "Failed to delete send"),
+        )
+
+    # ── Track input source ──────────────────────────────────────────
+
+    def set_track_input(
+        self, track: int, input_code: int,
+    ) -> CommandResult:
+        """Set the recording input source for a track.
+
+        Args:
+            track: Track number (>= 1).
+            input_code: Input source code. -1=None, 0=MIDI,
+                        0x100+ch=Mono audio, 0x600+ch=Stereo audio.
+                        Common: 256=input 1 mono, 6400=input 1 stereo.
+        """
+        if track < 1:
+            return CommandResult(
+                success=False, address="/track/input",
+                error=f"Invalid track={track}",
+            )
+
+        result = self._lua_trigger(
+            "/tmp/audioshuttle_input_trigger",
+            "/tmp/audioshuttle_input_result.json",
+            f"{track}:{input_code}",
+        )
+
+        if result and result.get("success"):
+            return CommandResult(
+                success=True, address="/track/input",
+                reaper_feedback=f"Track {track} input set to {input_code}",
+            )
+        return CommandResult(
+            success=False, address="/track/input",
+            error=(result or {}).get("error", "Failed to set input"),
+        )
+
+    # ── Quick OSC wins ──────────────────────────────────────────────
+
+    def select_track(self, track: int) -> CommandResult:
+        """Select a track in Reaper (deselects others).
+
+        Args:
+            track: Track number (>= 1).
+        """
+        if track < 1:
+            return CommandResult(
+                success=False, address="/track/select",
+                error=f"Invalid track={track}",
+            )
+        return self.send_command(f"/track/{track}/select", 1)
+
+    def open_fx_ui(self, track: int, fx: int) -> CommandResult:
+        """Open a plugin's UI window.
+
+        Args:
+            track: Track number (>= 1).
+            fx: FX index (0-based).
+        """
+        if track < 1 or fx < 0:
+            return CommandResult(
+                success=False, address="/fx/openui",
+                error=f"Invalid track={track} or fx={fx}",
+            )
+        return self.send_command(f"/track/{track}/fx/{fx}/openui", 1)
+
+    def set_playrate(self, rate: float) -> CommandResult:
+        """Set the playback rate (0.25 to 4.0).
+
+        Different from tempo — changes pitch too.
+
+        Args:
+            rate: Playback rate (1.0 = normal).
+        """
+        rate = max(0.25, min(4.0, rate))
+        return self.send_command("/playrate", rate)
+
+    def solo_reset(self) -> CommandResult:
+        """Unsolo all tracks."""
+        return self.send_command("/action/40740")  # Unsolo all tracks
+
+    def move_track(self, track: int, new_position: int) -> CommandResult:
+        """Move a track to a new position in the track list.
+
+        Args:
+            track: Track number to move (>= 1).
+            new_position: Target position (>= 1).
+        """
+        if track < 1 or new_position < 1:
+            return CommandResult(
+                success=False, address="/track/move",
+                error=f"Invalid track={track} or position={new_position}",
+            )
+
+        result = self._lua_trigger(
+            "/tmp/audioshuttle_move_trigger",
+            "/tmp/audioshuttle_move_result.json",
+            f"{track}:{new_position}",
+        )
+
+        if result and result.get("success"):
+            return CommandResult(
+                success=True, address="/track/move",
+                reaper_feedback=f"Moved track {track} to position {new_position}",
+            )
+        return CommandResult(
+            success=False, address="/track/move",
+            error=(result or {}).get("error", "Failed to move track"),
+        )
+
     # ── Undo/Redo via actions ─────────────────────────────────────
 
     def undo(self) -> CommandResult:
