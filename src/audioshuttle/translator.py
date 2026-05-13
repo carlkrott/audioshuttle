@@ -221,6 +221,9 @@ Rules:
 - "arm for recording" → set_track_arm arm=true + set_track_monitor mode=1
 - Use multiple commands when the user says sequential things
 - Estimate delay_ms from natural language: "a few seconds" ≈ 3000, "then" ≈ 500, "after a moment" ≈ 1000
+
+CRITICAL: Output ONLY JSON. No explanations. No markdown. No thinking. Just {"tool": ...} or [{"tool": ...}].
+If the user asks for a project/song, ALWAYS use generate_project — it handles everything.
 """
 
 # Immutable original — used by reset endpoint
