@@ -1014,7 +1014,27 @@ class ReaperOSC:
                 logger.warning("generate_project: MIDI import timeout for %s",
                                role)
 
-            results.append(f"{role.capitalize()} (T{new_track})")
+            # Auto-load instrument plugin on the track
+            plugin_name = self._INSTRUMENT_PLUGINS.get(role)
+            if plugin_name:
+                time.sleep(0.2)
+                fx_result = self._fx_trigger("add", new_track, plugin_name, wait=0.8)
+                if fx_result.get("success"):
+                    results.append(
+                        f"{role.capitalize()} (T{new_track}) + {plugin_name}"
+                    )
+                    logger.info(
+                        "generate_project: loaded %s on track %d", plugin_name, new_track
+                    )
+                else:
+                    results.append(f"{role.capitalize()} (T{new_track})")
+                    logger.warning(
+                        "generate_project: failed to load %s: %s",
+                        plugin_name, fx_result.get("error"),
+                    )
+            else:
+                results.append(f"{role.capitalize()} (T{new_track})")
+
             time.sleep(0.3)
 
         key_desc = f"{key} {scale}"
@@ -1365,6 +1385,286 @@ class ReaperOSC:
             )
         value = max(0.0, min(1.0, value))
         return self.send_command(f"/track/{track}/fx/{fx}/wetdry", value)
+
+    # ── Plugin/FX management via Lua watcher ────────────────────────
+
+    # Instrument role → default plugin mapping
+    _INSTRUMENT_PLUGINS: dict[str, str] = {
+        "drums": "ReaSynDr",
+        "drum": "ReaSynDr",
+        "beat": "ReaSynDr",
+        "bass": "ReaSynth",
+        "melody": "ReaSynth",
+        "lead": "ReaSynth",
+        "chords": "ReaSynth",
+        "keys": "ReaSynth",
+        "pad": "ReaSynth",
+        "synth": "ReaSynth",
+        "strings": "ReaSynth",
+    }
+
+    def _fx_trigger(
+        self, command: str, track: int, *args: str, wait: float = 1.0,
+    ) -> dict:
+        """Send an FX command to the Lua watcher and return the JSON result.
+
+        Args:
+            command: FX command (add, remove, set_preset, bypass, set_param, list).
+            track: Track number (1-based).
+            *args: Additional command arguments.
+            wait: Max seconds to wait for result.
+        """
+        import json as _json
+
+        trigger_path = "/tmp/audioshuttle_fx_trigger"
+        result_path = "/tmp/audioshuttle_fx_result.json"
+
+        # Clean up stale results
+        try:
+            os.remove(result_path)
+        except OSError:
+            pass
+
+        # Build trigger content: "CMD:TRACK:ARGS..."
+        parts = [command, str(track)] + list(args)
+        content = ":".join(parts)
+
+        with open(trigger_path, "w") as f:
+            f.write(content)
+
+        # Chown to Reaper user
+        import glob as _glob
+        for pid_dir in _glob.glob("/proc/[0-9]*"):
+            try:
+                with open(f"{pid_dir}/cmdline", "rb") as pf:
+                    if b"REAPER/reaper" in pf.read():
+                        stat = os.stat(f"{pid_dir}")
+                        os.chown(trigger_path, stat.st_uid, stat.st_gid)
+                        break
+            except (OSError, PermissionError):
+                continue
+
+        # Wait for result
+        import time
+        for _ in range(int(wait * 10)):
+            time.sleep(0.1)
+            if os.path.exists(result_path):
+                try:
+                    with open(result_path) as rf:
+                        result = _json.load(rf)
+                    os.remove(result_path)
+                    return result
+                except (OSError, ValueError):
+                    pass
+
+        return {"success": False, "error": "timeout waiting for FX result"}
+
+    def load_plugin(
+        self, track: int, plugin_name: str,
+    ) -> CommandResult:
+        """Load a plugin/FX onto a track.
+
+        Supports VST, VSTi, and JSFX plugins by name.
+        Examples: "ReaSynth", "ReaSynDr", "ReaEQ", "JS: Delay", "ReaSamplOmatic5000"
+
+        Args:
+            track: Track number (>= 1).
+            plugin_name: Plugin name as Reaper knows it.
+        """
+        if track < 1:
+            return CommandResult(
+                success=False, address="/fx/add",
+                error=f"Invalid track={track} (must be >= 1)",
+            )
+
+        result = self._fx_trigger("add", track, plugin_name)
+
+        if result.get("success"):
+            self._log_command(
+                "load_plugin",
+                f"Loaded '{result.get('name', plugin_name)}' on track {track} (FX#{result.get('fx_index', '?')})",
+            )
+            return CommandResult(
+                success=True,
+                address="/fx/add",
+                reaper_feedback=(
+                    f"Loaded {result.get('name', plugin_name)} "
+                    f"on track {track} as FX#{result.get('fx_index', '?')}"
+                ),
+            )
+        else:
+            return CommandResult(
+                success=False, address="/fx/add",
+                error=result.get("error", f"Failed to load {plugin_name}"),
+            )
+
+    def remove_plugin(self, track: int, fx: int) -> CommandResult:
+        """Remove a plugin/FX from a track.
+
+        Args:
+            track: Track number (>= 1).
+            fx: FX index on the track (0-based).
+        """
+        if track < 1 or fx < 0:
+            return CommandResult(
+                success=False, address="/fx/remove",
+                error=f"Invalid track={track} or fx={fx}",
+            )
+
+        result = self._fx_trigger("remove", track, str(fx))
+
+        if result.get("success"):
+            return CommandResult(
+                success=True, address="/fx/remove",
+                reaper_feedback=f"Removed FX#{fx} from track {track}",
+            )
+        else:
+            return CommandResult(
+                success=False, address="/fx/remove",
+                error=result.get("error", "Failed to remove FX"),
+            )
+
+    def set_plugin_preset(
+        self, track: int, fx: int, preset_name: str,
+    ) -> CommandResult:
+        """Set a plugin's preset by name.
+
+        Args:
+            track: Track number (>= 1).
+            fx: FX index (0-based).
+            preset_name: Preset name to apply.
+        """
+        if track < 1 or fx < 0:
+            return CommandResult(
+                success=False, address="/fx/preset",
+                error=f"Invalid track={track} or fx={fx}",
+            )
+
+        result = self._fx_trigger("set_preset", track, str(fx), preset_name)
+
+        if result.get("success"):
+            return CommandResult(
+                success=True, address="/fx/preset",
+                reaper_feedback=f"Set preset '{preset_name}' on track {track} FX#{fx}",
+            )
+        else:
+            return CommandResult(
+                success=False, address="/fx/preset",
+                error=result.get("error", f"Failed to set preset '{preset_name}'"),
+            )
+
+    def list_track_fx(self, track: int) -> CommandResult:
+        """List all FX/plugins on a track.
+
+        Args:
+            track: Track number (>= 1).
+        """
+        if track < 1:
+            return CommandResult(
+                success=False, address="/fx/list",
+                error=f"Invalid track={track}",
+            )
+
+        result = self._fx_trigger("list", track)
+
+        if result.get("success"):
+            fx_list = result.get("fx", [])
+            if not fx_list:
+                return CommandResult(
+                    success=True, address="/fx/list",
+                    reaper_feedback=f"Track {track}: no FX loaded",
+                )
+            lines = [f"Track {track} FX:"]
+            for fx in fx_list:
+                instr_tag = " [INSTRUMENT]" if fx.get("is_instrument") else ""
+                status = "ON" if fx.get("enabled") else "BYPASSED"
+                preset = fx.get("preset", "")
+                preset_str = f" (preset: {preset})" if preset else ""
+                lines.append(
+                    f"  FX#{fx['index']}: {fx['name']}{instr_tag} [{status}]{preset_str}"
+                )
+            return CommandResult(
+                success=True, address="/fx/list",
+                reaper_feedback="\n".join(lines),
+            )
+        else:
+            return CommandResult(
+                success=False, address="/fx/list",
+                error=result.get("error", "Failed to list FX"),
+            )
+
+    def list_available_plugins(self) -> CommandResult:
+        """List all available plugins that can be loaded.
+
+        Queries the Lua watcher's curated plugin database.
+        """
+        import json as _json
+
+        trigger_path = "/tmp/audioshuttle_fx_list_request"
+        result_path = "/tmp/audioshuttle_fx_list.json"
+
+        try:
+            os.remove(result_path)
+        except OSError:
+            pass
+
+        # Write trigger
+        with open(trigger_path, "w") as f:
+            f.write("list")
+
+        # Chown to Reaper user
+        import glob as _glob
+        for pid_dir in _glob.glob("/proc/[0-9]*"):
+            try:
+                with open(f"{pid_dir}/cmdline", "rb") as pf:
+                    if b"REAPER/reaper" in pf.read():
+                        stat = os.stat(f"{pid_dir}")
+                        os.chown(trigger_path, stat.st_uid, stat.st_gid)
+                        break
+            except (OSError, PermissionError):
+                continue
+
+        # Wait for result
+        import time
+        for _ in range(20):
+            time.sleep(0.1)
+            if os.path.exists(result_path):
+                try:
+                    with open(result_path) as rf:
+                        result = _json.load(rf)
+                    os.remove(result_path)
+                    break
+                except (OSError, ValueError):
+                    result = None
+        else:
+            result = None
+
+        if not result:
+            return CommandResult(
+                success=False, address="/fx/list_all",
+                error="Timeout listing available plugins",
+            )
+
+        plugins = result.get("plugins", [])
+
+        # Group by category
+        categories: dict[str, list[str]] = {}
+        for p in plugins:
+            cat = p.get("category", "other")
+            categories.setdefault(cat, []).append(
+                f"{p['name']} ({p['type']})"
+            )
+
+        lines = ["Available plugins:"]
+        for cat in sorted(categories):
+            lines.append(f"  {cat.upper()}:")
+            for name in sorted(categories[cat]):
+                lines.append(f"    • {name}")
+
+        return CommandResult(
+            success=True, address="/fx/list_all",
+            reaper_feedback="\n".join(lines),
+        )
 
     # ── Undo/Redo via actions ─────────────────────────────────────
 

@@ -56,6 +56,9 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "fx_next_preset": {"track": int, "fx": int},
     "fx_prev_preset": {"track": int, "fx": int},
     "fx_set_wetdry": {"track": int, "fx": int, "value": float},
+    "load_plugin": {"track": int, "plugin_name": str},
+    "remove_plugin": {"track": int, "fx": int},
+    "set_plugin_preset": {"track": int, "fx": int, "preset_name": str},
     # Markers
     "goto_marker": {"marker": int},
     "set_marker_name": {"marker": int, "name": str},
@@ -65,165 +68,63 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "trigger_action": {"command_id": int},
 }
 
-SYSTEM_PROMPT = """You translate natural language DAW commands into structured JSON tool calls.
+SYSTEM_PROMPT = """Translate DAW commands to JSON. Output ONLY {"tool":...} or [{"tool":...}].
 
-You can output a SINGLE command or MULTIPLE commands in sequence.
-For multiple commands, output a JSON array. For a single command, output a JSON object.
-
-Single command format:
-{"tool": "<tool_name>", "args": {<key>: <value>}}
-
-Multiple commands format (use when the user's request involves sequential actions):
-[
-  {"tool": "<tool_name>", "args": {<key>: <value>}, "delay_ms": 0},
-  {"tool": "<tool_name>", "args": {<key>: <value>}, "delay_ms": 1000}
-]
-
-The "delay_ms" field is optional — use it when commands need timing gaps
-(e.g., "play for a few seconds then stop" → play with 3000ms delay before stop).
-
-Available tools:
-
-Transport:
-- transport_control — args: {"action": "play" or "stop" or "record" or "pause"}
-- transport_seek — args: {"position_seconds": float}
-- toggle_repeat — args: {}
-- toggle_metronome — args: {}
-- undo — args: {} — undo last action
-- redo — args: {} — redo last undone action
-
-Tempo:
-- set_tempo — args: {"bpm": float}
-
-Track controls:
-- set_track_volume — args: {"track": int, "volume": float 0.0-1.0}
-- set_track_mute — args: {"track": int, "mute": bool}
-- set_track_solo — args: {"track": int, "solo": bool}
-- set_track_pan — args: {"track": int, "pan": float -1.0 to 1.0}
-- set_track_color — args: {"track": int, "color": str} — hex (#ff0000) or named (red, blue, green, yellow, purple, orange, pink, cyan)
-- set_track_arm — args: {"track": int, "arm": bool}
-- set_track_monitor — args: {"track": int, "mode": int} — 0=off, 1=normal, 2=tape/record-only
-- set_track_auto_mode — args: {"track": int, "mode": str} — "trim", "read", "latch", "touch", "write"
-- set_track_send_volume — args: {"track": int, "send": int, "volume": float} — send index 0-based
-
-Track management:
-- insert_track — args: {}
-- rename_track — args: {"track": int, "name": str}
-- insert_midi_pattern — args: {"role": str, "track": int|optional} — roles: "drums", "bass", "chords", "melody"
-  If user says "on the bass track" or "on track 5", include the track number.
-  If no target track given, pair with insert_track first (creates new track).
-  Examples: "add melody on the bass" → track=5 (if bass is T5), "add drums" → no track (insert_track first).
-
-Song structure & project generation:
-- create_song_structure — args: {"sections": [{"name": str, "bars": int}, ...], "bpm": int|optional}
-  Creates timeline markers for song sections. User says "16-bar verse, 8-bar chorus" → expand into named instances.
-- generate_project — args: {"sections": list, "instruments": list, "key": str, "scale": str, "bpm": int}
-  Creates a complete project: markers + tracks + key-aware MIDI patterns.
-  instruments: any of "drums", "bass", "melody", "keys", "strings", "rhythm"
-  key: C, D, E, F, G, A, B (with # or b for sharps/flats)
-  scale: "major", "minor", "pentatonic", "blues"
-  This is a SINGLE command — do NOT break it into multiple tool calls.
-  Example: "create a project in C major with drums bass melody keys, 16-bar verse 8-bar chorus" →
-    {"tool": "generate_project", "args": {"sections": [{"name": "Verse", "bars": 16}, {"name": "Chorus", "bars": 8}], "instruments": ["drums", "bass", "melody", "keys"], "key": "C", "scale": "major", "bpm": 120}}
-
-Master:
-- set_master_volume — args: {"volume": float}
-- set_master_pan — args: {"pan": float}
-
-FX:
-- set_fx_param — args: {"track": int, "fx": int, "param": int, "value": float}
-- fx_bypass — args: {"track": int, "fx": int, "bypass": bool}
-- fx_next_preset — args: {"track": int, "fx": int} — cycle to next preset
-- fx_prev_preset — args: {"track": int, "fx": int} — cycle to previous preset
-- fx_set_wetdry — args: {"track": int, "fx": int, "value": float 0.0-1.0} — 0=dry, 1=wet
-
-Markers:
-- goto_marker — args: {"marker": int} — jump to marker by number
-- set_marker_name — args: {"marker": int, "name": str} — name a marker
-
-Loop:
-- set_loop_points — args: {"start": float, "end": float} — loop range in seconds
-
-Actions:
-- trigger_action — args: {"command_id": int}
-
-TRACK NUMBERING FOR NEW TRACKS (CRITICAL):
-When inserting new tracks, they are added at the BOTTOM of the track list.
-If the DAW state shows N tracks, the FIRST insert_track creates track N+1,
-the SECOND creates track N+2, etc.
-Use the DAW state's track count to calculate the correct track numbers.
-Example: If DAW has 4 tracks and user says "add 2 tracks named guitar and bass":
-  [{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":5,"name":"guitar"}},{"tool":"rename_track","args":{"track":6,"name":"bass"}}]
-
-Multi-command examples:
-  "add a drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
-  "add melody on the bass track" (bass is T5) → [{"tool":"insert_midi_pattern","args":{"role":"melody","track":5}}]
-  "add rhythm on track 3" → [{"tool":"insert_midi_pattern","args":{"role":"drums","track":3}}]
-  "add 3 tracks and set tempo to 140" → [{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"set_tempo","args":{"bpm":140}}]
-  "add a bass track and name it bass" (DAW has 3 tracks) → [{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":4,"name":"bass"}}]
-  "add drums and mute track 3" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}},{"tool":"set_track_mute","args":{"track":3,"mute":true}}]
-  "go to marker 2 and name it chorus" → [{"tool":"goto_marker","args":{"marker":2}},{"tool":"set_marker_name","args":{"marker":2,"name":"chorus"}}]
-  "arm track 1 for recording and set input monitoring" → [{"tool":"set_track_arm","args":{"track":1,"arm":true}},{"tool":"set_track_monitor","args":{"track":1,"mode":1}}]
-  "more reverb on track 2" → [{"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.8}}]
-  "less reverb on track 2" → [{"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.2}}]
-  "try the next preset on the guitar" → [{"tool":"fx_next_preset","args":{"track":3,"fx":0}}]
-  "previous preset on track 2" → [{"tool":"fx_prev_preset","args":{"track":2,"fx":0}}]
-  "undo that" → [{"tool":"undo","args":{}}]
-  "redo" → [{"tool":"redo","args":{}}]
-  "loop from 10 to 30 seconds" → [{"tool":"set_loop_points","args":{"start":10.0,"end":30.0}}]
-  "set up for recording: arm track 1, monitor on, click track on, record" → [{"tool":"set_track_arm","args":{"track":1,"arm":true}},{"tool":"set_track_monitor","args":{"track":1,"mode":1}},{"tool":"toggle_metronome","args":{}},{"tool":"transport_control","args":{"action":"record"}}]
-  "put track 3 in write mode" → [{"tool":"set_track_auto_mode","args":{"track":3,"mode":"write"}}]
-  "set guitar to latch mode" (guitar is track 3) → [{"tool":"set_track_auto_mode","args":{"track":3,"mode":"latch"}}]
-  "add markers for a song: 16-bar verse and 8-bar chorus, verse, chorus" → [{"tool":"create_song_structure","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16},{"name":"Chorus","bars":8}],"bpm":120}}]
-  "create a project in D minor with drums bass and melody, verse chorus verse" → [{"tool":"generate_project","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16}],"instruments":["drums","bass","melody"],"key":"D","scale":"minor","bpm":120}}]
-  "change automation to touch on track 2" → [{"tool":"set_track_auto_mode","args":{"track":2,"mode":"touch"}}]
-  "send track 1 to track 3" → [{"tool":"set_track_send_volume","args":{"track":1,"send":0,"volume":1.0}}]
-  "set the send level from guitar to drums lower" (guitar=3, drums=4) → [{"tool":"set_track_send_volume","args":{"track":3,"send":0,"volume":0.3}}]
-  "turn on input monitoring for track 1" → [{"tool":"set_track_monitor","args":{"track":1,"mode":1}}]
-  "turn off monitoring on track 2" → [{"tool":"set_track_monitor","args":{"track":2,"mode":0}}]
-
-Keyword-to-tool mapping (CRITICAL — use these mappings):
-  "write mode" / "write automation" / "automation write" → set_track_auto_mode mode="write"
-  "latch mode" / "latch automation" → set_track_auto_mode mode="latch"
-  "touch mode" / "touch automation" → set_track_auto_mode mode="touch"
-  "read mode" / "read automation" → set_track_auto_mode mode="read"
-  "trim mode" / "trim automation" → set_track_auto_mode mode="trim"
-  "monitoring on" / "input monitoring" / "monitor on" → set_track_monitor mode=1
-  "monitoring off" / "monitor off" → set_track_monitor mode=0
-  "tape monitoring" / "tape mode monitoring" → set_track_monitor mode=2
-  "loop from X to Y" / "set loop" → set_loop_points
-  "more reverb/delay/echo/effect" → fx_set_wetdry (higher value)
-  "less reverb/delay/echo/effect" → fx_set_wetdry (lower value)
-  "dry" / "no effect" → fx_set_wetdry value=0.0
-  "fully wet" / "100 percent wet" → fx_set_wetdry value=1.0
-  "next preset" → fx_next_preset
-  "previous preset" / "prev preset" → fx_prev_preset
-  "send X to Y" / "routing" → set_track_send_volume
-  "undo" → undo
-  "redo" → redo
-  "go to marker" / "jump to marker" → goto_marker
-  "name marker" / "rename marker" → set_marker_name
-  "add markers" / "song structure" / "verse and chorus" → create_song_structure
-  "create project" / "generate project" / "set up a song" / "new project" → generate_project
-  "in key of X" / "in C" / "in D minor" / "key of G" → key parameter for generate_project
+Tools:
+- transport_control: {"action": "play"/"stop"/"record"/"pause"}
+- transport_seek: {"position_seconds": float}
+- set_tempo: {"bpm": float}
+- toggle_repeat, toggle_metronome, undo, redo: {}
+- set_track_volume: {"track": int, "volume": 0.0-1.0}
+- set_track_mute: {"track": int, "mute": bool}
+- set_track_solo: {"track": int, "solo": bool}
+- set_track_pan: {"track": int, "pan": -1.0 to 1.0}
+- set_track_color: {"track": int, "color": "#hex" or "red"/"blue"/"green" etc}
+- set_track_arm: {"track": int, "arm": bool}
+- set_track_monitor: {"track": int, "mode": 0=off/1=normal/2=tape}
+- set_track_auto_mode: {"track": int, "mode": "trim"/"read"/"latch"/"touch"/"write"}
+- set_track_send_volume: {"track": int, "send": int, "volume": float}
+- set_master_volume: {"volume": float}, set_master_pan: {"pan": float}
+- insert_track: {}
+- rename_track: {"track": int, "name": str}
+- insert_midi_pattern: {"role": "drums"/"bass"/"chords"/"melody", "track": int|optional}
+- generate_project: {"sections": [{"name": str, "bars": int}], "instruments": ["drums","bass","melody","keys","strings"], "key": str, "scale": "major"/"minor"/"pentatonic"/"blues", "bpm": int}
+  Creates full project: markers + tracks + MIDI. SINGLE command, do NOT split.
+- create_song_structure: {"sections": [{"name": str, "bars": int}], "bpm": int}
+- set_fx_param: {"track": int, "fx": int, "param": int, "value": float}
+- fx_bypass: {"track": int, "fx": int, "bypass": bool}
+- fx_next_preset, fx_prev_preset: {"track": int, "fx": int}
+- fx_set_wetdry: {"track": int, "fx": int, "value": 0.0-1.0}
+- load_plugin: {"track": int, "plugin_name": str} — load VST/JSFX plugin by name. Instruments: ReaSynth, ReaSynDr, ReaSamplOmatic5000. Effects: ReaEQ, ReaComp, ReaDelay, ReaVerb, ReaGate, ReaLimit, ReaPitch, etc. JSFX: "JS: Delay", "JS: Chorus", "JS: Distortion", "JS: MIDI Arpeggiator", etc.
+- remove_plugin: {"track": int, "fx": int} — remove plugin by FX index
+- set_plugin_preset: {"track": int, "fx": int, "preset_name": str}
+- goto_marker: {"marker": int}
+- set_marker_name: {"marker": int, "name": str}
+- set_loop_points: {"start": float, "end": float}
+- trigger_action: {"command_id": int}
 
 Rules:
-- Match track NAMES to find track NUMBER from the DAW state
-- For NEW tracks: count existing tracks from DAW state, new tracks get N+1, N+2, etc.
-- "mute X" means mute=true, "unmute X" means mute=false
-- Volume: "turn up/increase" ≈ 0.85, "turn down/decrease" ≈ 0.5, "normal" ≈ 0.75
-- "down by N dB" ≈ subtract N*0.01 from current volume (rough approximation)
-- "up by N dB" ≈ add N*0.01 to current volume
-- Track numbers start at 1. FX and parameter indices are 0-based. Send indices are 0-based.
-- "more reverb/delay/echo" → fx_set_wetdry with higher value (0.7-0.9)
-- "less reverb/delay" → fx_set_wetdry with lower value (0.1-0.3)
-- "dry" → fx_set_wetdry value 0.0, "fully wet" → value 1.0
-- "arm for recording" → set_track_arm arm=true + set_track_monitor mode=1
-- Use multiple commands when the user says sequential things
-- Estimate delay_ms from natural language: "a few seconds" ≈ 3000, "then" ≈ 500, "after a moment" ≈ 1000
+- New tracks go at bottom. If N tracks exist, first insert = N+1.
+- "mute" = mute:true, "unmute" = mute:false
+- "turn up" ≈ 0.85, "turn down" ≈ 0.5, "normal" ≈ 0.75
+- "arm for recording" → arm=true + monitor mode=1
+- "create project"/"generate project"/"new project"/"set up song" → generate_project
+- "add markers"/"song structure" → create_song_structure
+- Multiple commands use array with optional delay_ms
+- Track numbers start at 1. FX/send indices are 0-based.
 
-CRITICAL: Output ONLY JSON. No explanations. No markdown. No thinking. Just {"tool": ...} or [{"tool": ...}].
-If the user asks for a project/song, ALWAYS use generate_project — it handles everything.
+Examples:
+  "play" → {"tool":"transport_control","args":{"action":"play"}}
+  "mute drums and solo bass" (drums=T1,bass=T2) → [{"tool":"set_track_mute","args":{"track":1,"mute":true}},{"tool":"set_track_solo","args":{"track":2,"solo":true}}]
+  "add drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
+  "create project in D minor with drums bass melody, verse chorus verse" → {"tool":"generate_project","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16}],"instruments":["drums","bass","melody"],"key":"D","scale":"minor","bpm":120}}
+  "set tempo 140 and play" → [{"tool":"set_tempo","args":{"bpm":140}},{"tool":"transport_control","args":{"action":"play"}}]
+  "more reverb on track 2" → {"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.8}}
+  "put reasyndr on drums track" (drums=T1) → {"tool":"load_plugin","args":{"track":1,"plugin_name":"ReaSynDr"}}
+  "add EQ to bass track" (bass=T2) → {"tool":"load_plugin","args":{"track":2,"plugin_name":"ReaEQ"}}
+  "load reverb on track 3 and set to 80% wet" → [{"tool":"load_plugin","args":{"track":3,"plugin_name":"ReaVerb"}},{"tool":"fx_set_wetdry","args":{"track":3,"fx":0,"value":0.8}}]
+
+CRITICAL: Output ONLY JSON. No explanations. No markdown. No thinking. Just {"tool":...} or [{"tool":...}].
 """
 
 # Immutable original — used by reset endpoint
@@ -307,21 +208,21 @@ class IntentTranslator:
             state_desc.replace('\n', ' | ')[:200],
         )
 
-        # Single user message with everything — Gemma E2B works best this way
+        # Single user message — avoids Jinja template issues with system role
         messages = [
             {
                 "role": "user",
                 "content": (
                     f"{SYSTEM_PROMPT}\n\n"
-                    f"Current DAW state:\n{state_desc}\n\n"
-                    f"User command: {user_input}\n\n"
+                    f"DAW: {state_desc}\n\n"
+                    f"Command: {user_input}\n\n"
                     f"Respond with only the JSON (object or array)."
                 ),
             },
         ]
 
         raw = self._model_server.chat(
-            messages, temperature=0.1, max_tokens=2048
+            messages, temperature=0.1, max_tokens=4096
         )
         if raw is None:
             return [TranslationResult(

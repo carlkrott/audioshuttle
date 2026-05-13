@@ -52,13 +52,14 @@ class TestTranslationResult:
 class TestToolSchemas:
     """Test TOOL_SCHEMAS has all expected tools."""
 
-    def test_all_37_tools_present(self):
+    def test_all_39_tools_present(self):
         expected = {
             "list_tracks", "get_transport", "get_daw_state", "get_track_count",
             "transport_control", "transport_seek",
             "set_track_volume", "set_track_mute", "set_track_solo", "set_track_pan",
             "set_master_volume", "set_master_pan",
             "set_fx_param", "fx_bypass", "fx_next_preset", "fx_prev_preset", "fx_set_wetdry",
+            "load_plugin", "remove_plugin", "set_plugin_preset",
             "trigger_action", "set_track_arm",
             "toggle_repeat", "toggle_metronome", "undo", "redo",
             "set_tempo", "insert_track", "rename_track",

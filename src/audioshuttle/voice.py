@@ -112,6 +112,16 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         "set_loop_points": lambda: bridge.set_loop_points(
             float(args["start"]), float(args["end"]),
         ),
+        # Plugin/FX management
+        "load_plugin": lambda: bridge.load_plugin(
+            int(args["track"]), str(args["plugin_name"]),
+        ),
+        "remove_plugin": lambda: bridge.remove_plugin(
+            int(args["track"]), int(args["fx"]),
+        ),
+        "set_plugin_preset": lambda: bridge.set_plugin_preset(
+            int(args["track"]), int(args["fx"]), str(args["preset_name"]),
+        ),
     }
 
     # Discovery tools — no bridge call needed
