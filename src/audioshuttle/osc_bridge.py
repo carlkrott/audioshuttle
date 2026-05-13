@@ -668,10 +668,10 @@ class ReaperOSC:
 
         # Create trigger file owned by Reaper's user (needed for sticky-bit /tmp)
         # The __startup.lua watcher runs as korphaus and needs to os.remove() it
-        # Trigger format: "import" or "import:track:N" for targeting a specific track
+        # Trigger format: "import" or "import:track:N:role" for targeting a specific track
         trigger_content = "import"
         if target_track is not None:
-            trigger_content = f"import:track:{target_track}"
+            trigger_content = f"import:track:{target_track}:{role}"
         try:
             with open(trigger_path, "w") as f:
                 f.write(trigger_content)
@@ -991,7 +991,7 @@ class ReaperOSC:
             except OSError:
                 pass
 
-            trigger_content = f"import:track:{new_track}"
+            trigger_content = f"import:track:{new_track}:{role}"
             with open(trigger_path, "w") as f:
                 f.write(trigger_content)
 
@@ -1983,13 +1983,21 @@ class ReaperOSC:
         )
 
     def _chown_to_reaper(self, path: str) -> None:
-        """Chown a file to the Reaper user (found via /proc)."""
+        """Chown a file to the Reaper user (found via /proc).
+
+        Skips sudo wrappers (UID 0) to find the actual Reaper process
+        running as the target user (e.g. korphaus).
+        """
         import glob as _glob
         for pid_dir in _glob.glob("/proc/[0-9]*"):
             try:
                 with open(f"{pid_dir}/cmdline", "rb") as pf:
-                    if b"REAPER/reaper" in pf.read():
+                    cmdline = pf.read()
+                    if b"REAPER/reaper" in cmdline and b"sudo" not in cmdline:
                         stat = os.stat(f"{pid_dir}")
+                        # Skip root (sudo wrapper) — we want the actual user
+                        if stat.st_uid == 0:
+                            continue
                         os.chown(path, stat.st_uid, stat.st_gid)
                         break
             except (OSError, PermissionError):
