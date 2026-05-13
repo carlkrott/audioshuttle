@@ -60,6 +60,8 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "remove_plugin": {"track": int, "fx": int},
     "set_plugin_preset": {"track": int, "fx": int, "preset_name": str},
     "get_plugin_params": {"track": int, "fx": int},
+    "list_track_fx": {"track": int},
+    "list_available_plugins": {},
     # Routing
     "create_send": {"source_track": int, "dest_track": int},
     "delete_send": {"track": int, "send": int},
@@ -82,7 +84,16 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
 
 SYSTEM_PROMPT = """Translate DAW commands to JSON. Output ONLY {"tool":...} or [{"tool":...}].
 
-Tools:
+Discovery (return current state — use when user asks "what tracks", "show me", "current"):
+- list_tracks: {} — list all tracks with names, volumes, FX
+- get_transport: {} — play/stop/record state + position
+- get_daw_state: {} — full state snapshot
+- get_track_count: {} — just the number of tracks
+- list_track_fx: {"track": int} — list FX/plugins on a specific track
+- list_available_plugins: {} — list all available VST/JSFX plugins
+- get_plugin_params: {"track": int, "fx": int} — dump all params with names/values. USE before set_fx_param to discover what to set.
+
+Transport:
 - transport_control: {"action": "play"/"stop"/"record"/"pause"}
 - transport_seek: {"position_seconds": float}
 - set_tempo: {"bpm": float}
@@ -110,7 +121,6 @@ Tools:
 - load_plugin: {"track": int, "plugin_name": str} — load VST/JSFX plugin by name. Instruments: ReaSynth, ReaSynDr, ReaSamplOmatic5000. Effects: ReaEQ, ReaComp, ReaDelay, ReaVerb, ReaGate, ReaLimit, ReaPitch, etc. JSFX: "JS: Delay", "JS: Chorus", "JS: Distortion", "JS: MIDI Arpeggiator", etc.
 - remove_plugin: {"track": int, "fx": int} — remove plugin by FX index
 - set_plugin_preset: {"track": int, "fx": int, "preset_name": str}
-- get_plugin_params: {"track": int, "fx": int} — dump all params with names/values. USE before set_fx_param to discover what to set.
 - create_send: {"source_track": int, "dest_track": int} — route audio from one track to another
 - delete_send: {"track": int, "send": int} — remove a send
 - set_track_input: {"track": int, "input_code": int} — set recording input. -1=none, 0=MIDI, 256=mono input 1, 6400=stereo input 1
@@ -144,6 +154,10 @@ Examples:
   "put reasyndr on drums track" (drums=T1) → {"tool":"load_plugin","args":{"track":1,"plugin_name":"ReaSynDr"}}
   "add EQ to bass track" (bass=T2) → {"tool":"load_plugin","args":{"track":2,"plugin_name":"ReaEQ"}}
   "load reverb on track 3 and set to 80% wet" → [{"tool":"load_plugin","args":{"track":3,"plugin_name":"ReaVerb"}},{"tool":"fx_set_wetdry","args":{"track":3,"fx":0,"value":0.8}}]
+  "what plugins are on track 2" → {"tool":"list_track_fx","args":{"track":2}}
+  "show available plugins" → {"tool":"list_available_plugins","args":{}}
+  "route drums to reverb" (drums=T1,reverb=T3) → {"tool":"create_send","args":{"source_track":1,"dest_track":3}}
+  "what parameters does EQ on track 2 have" → {"tool":"get_plugin_params","args":{"track":2,"fx":0}}
 
 CRITICAL: Output ONLY JSON. No explanations. No markdown. No thinking. Just {"tool":...} or [{"tool":...}].
 """

@@ -89,6 +89,7 @@ class ReaperOSC:
             r"^/track/\d+/recarm$",
             r"^/track/\d+/fx/\d+/fxparam/\d+/value$",
             r"^/track/\d+/fx/\d+/bypass$",
+            r"^/track/\d+/fx/\d+/openui$",
             r"^/track/\d+/send/\d+/volume$",
             r"^/track/\d+/monitor$",
             r"^/track/count$",
@@ -349,10 +350,6 @@ class ReaperOSC:
         return self.send_command("/pause")
 
     # ── Track controls ──────────────────────────────────────────
-
-    def select_track(self, track: int) -> CommandResult:
-        """Select a track in Reaper (needed before some commands)."""
-        return self.send_command(f"/track/{track}/select", 1)
 
     def set_track_volume(self, track: int, value: float) -> CommandResult:
         """Set track volume (0.0 to 1.0, clamped)."""
@@ -677,18 +674,7 @@ class ReaperOSC:
         try:
             with open(trigger_path, "w") as f:
                 f.write(trigger_content)
-            # Find Reaper's UID and chown the trigger file
-            import glob as _glob
-            for pid_dir in _glob.glob("/proc/[0-9]*"):
-                try:
-                    with open(f"{pid_dir}/cmdline", "rb") as f:
-                        if b"REAPER/reaper" in f.read():
-                            import os as _os
-                            stat = _os.stat(f"{pid_dir}")
-                            _os.chown(trigger_path, stat.st_uid, stat.st_gid)
-                            break
-                except (OSError, PermissionError):
-                    continue
+            self._chown_to_reaper(trigger_path)
         except OSError:
             pass
 
@@ -794,18 +780,7 @@ class ReaperOSC:
         try:
             with open(trigger_path, "w") as f:
                 f.write("\n".join(lines))
-            # Chown to Reaper user
-            import glob as _glob
-            for pid_dir in _glob.glob("/proc/[0-9]*"):
-                try:
-                    with open(f"{pid_dir}/cmdline", "rb") as pf:
-                        if b"REAPER/reaper" in pf.read():
-                            import os as _os
-                            stat = _os.stat(f"{pid_dir}")
-                            _os.chown(trigger_path, stat.st_uid, stat.st_gid)
-                            break
-                except (OSError, PermissionError):
-                    continue
+            self._chown_to_reaper(trigger_path)
         except OSError as e:
             return CommandResult(
                 success=False, address="/markers",
@@ -990,17 +965,7 @@ class ReaperOSC:
                 f.write(trigger_content)
 
             # Chown to Reaper user
-            reaper_uid = None
-            for pid_dir in _glob.glob("/proc/[0-9]*"):
-                try:
-                    with open(f"{pid_dir}/cmdline", "rb") as pf:
-                        if b"REAPER/reaper" in pf.read():
-                            stat = os.stat(f"{pid_dir}")
-                            os.chown(trigger_path, stat.st_uid, stat.st_gid)
-                            reaper_uid = stat.st_uid
-                            break
-                except (OSError, PermissionError):
-                    continue
+            self._chown_to_reaper(trigger_path)
 
             # Wait for import (up to 3s)
             imported = False
@@ -1179,16 +1144,7 @@ class ReaperOSC:
         try:
             with open(color_path, "w") as f:
                 f.write(f"{track} {hex_color}")
-            # Chown to Reaper user (same as MIDI trigger pattern)
-            for pid_dir in glob.glob("/proc/[0-9]*"):
-                try:
-                    with open(f"{pid_dir}/cmdline", "rb") as f:
-                        if b"REAPER/reaper" in f.read():
-                            stat = os.stat(f"{pid_dir}")
-                            os.chown(color_path, stat.st_uid, stat.st_gid)
-                            break
-                except (OSError, PermissionError):
-                    continue
+            self._chown_to_reaper(color_path)
         except OSError as e:
             return CommandResult(
                 success=False,
@@ -1393,6 +1349,7 @@ class ReaperOSC:
         "drums": "ReaSynDr",
         "drum": "ReaSynDr",
         "beat": "ReaSynDr",
+        "rhythm": "ReaSynDr",
         "bass": "ReaSynth",
         "melody": "ReaSynth",
         "lead": "ReaSynth",
@@ -1414,50 +1371,15 @@ class ReaperOSC:
             *args: Additional command arguments.
             wait: Max seconds to wait for result.
         """
-        import json as _json
-
-        trigger_path = "/tmp/audioshuttle_fx_trigger"
-        result_path = "/tmp/audioshuttle_fx_result.json"
-
-        # Clean up stale results
-        try:
-            os.remove(result_path)
-        except OSError:
-            pass
-
-        # Build trigger content: "CMD:TRACK:ARGS..."
         parts = [command, str(track)] + list(args)
         content = ":".join(parts)
-
-        with open(trigger_path, "w") as f:
-            f.write(content)
-
-        # Chown to Reaper user
-        import glob as _glob
-        for pid_dir in _glob.glob("/proc/[0-9]*"):
-            try:
-                with open(f"{pid_dir}/cmdline", "rb") as pf:
-                    if b"REAPER/reaper" in pf.read():
-                        stat = os.stat(f"{pid_dir}")
-                        os.chown(trigger_path, stat.st_uid, stat.st_gid)
-                        break
-            except (OSError, PermissionError):
-                continue
-
-        # Wait for result
-        import time
-        for _ in range(int(wait * 10)):
-            time.sleep(0.1)
-            if os.path.exists(result_path):
-                try:
-                    with open(result_path) as rf:
-                        result = _json.load(rf)
-                    os.remove(result_path)
-                    return result
-                except (OSError, ValueError):
-                    pass
-
-        return {"success": False, "error": "timeout waiting for FX result"}
+        result = self._lua_trigger(
+            "/tmp/audioshuttle_fx_trigger",
+            "/tmp/audioshuttle_fx_result.json",
+            content,
+            wait=wait,
+        )
+        return result or {"success": False, "error": "timeout waiting for FX result"}
 
     def load_plugin(
         self, track: int, plugin_name: str,
@@ -1612,17 +1534,7 @@ class ReaperOSC:
         with open(trigger_path, "w") as f:
             f.write("list")
 
-        # Chown to Reaper user
-        import glob as _glob
-        for pid_dir in _glob.glob("/proc/[0-9]*"):
-            try:
-                with open(f"{pid_dir}/cmdline", "rb") as pf:
-                    if b"REAPER/reaper" in pf.read():
-                        stat = os.stat(f"{pid_dir}")
-                        os.chown(trigger_path, stat.st_uid, stat.st_gid)
-                        break
-            except (OSError, PermissionError):
-                continue
+        self._chown_to_reaper(trigger_path)
 
         # Wait for result
         import time
@@ -1666,13 +1578,25 @@ class ReaperOSC:
             reaper_feedback="\n".join(lines),
         )
 
+    def _chown_to_reaper(self, path: str) -> None:
+        """Chown a file to the Reaper user (found via /proc)."""
+        import glob as _glob
+        for pid_dir in _glob.glob("/proc/[0-9]*"):
+            try:
+                with open(f"{pid_dir}/cmdline", "rb") as pf:
+                    if b"REAPER/reaper" in pf.read():
+                        stat = os.stat(f"{pid_dir}")
+                        os.chown(path, stat.st_uid, stat.st_gid)
+                        break
+            except (OSError, PermissionError):
+                continue
+
     def _lua_trigger(
         self, trigger_path: str, result_path: str,
         content: str, wait: float = 1.0,
     ) -> dict | None:
         """Generic Lua watcher trigger: write content, wait for JSON result."""
         import json as _json
-        import glob as _glob
         import time
 
         try:
@@ -1683,16 +1607,7 @@ class ReaperOSC:
         with open(trigger_path, "w") as f:
             f.write(content)
 
-        # Chown to Reaper user
-        for pid_dir in _glob.glob("/proc/[0-9]*"):
-            try:
-                with open(f"{pid_dir}/cmdline", "rb") as pf:
-                    if b"REAPER/reaper" in pf.read():
-                        stat = os.stat(f"{pid_dir}")
-                        os.chown(trigger_path, stat.st_uid, stat.st_gid)
-                        break
-            except (OSError, PermissionError):
-                continue
+        self._chown_to_reaper(trigger_path)
 
         for _ in range(int(wait * 10)):
             time.sleep(0.1)
@@ -1896,7 +1811,7 @@ class ReaperOSC:
             rate: Playback rate (1.0 = normal).
         """
         rate = max(0.25, min(4.0, rate))
-        return self.send_command("/playrate", rate)
+        return self.send_command("/playrate/raw", rate)
 
     def solo_reset(self) -> CommandResult:
         """Unsolo all tracks."""
@@ -1969,16 +1884,7 @@ class ReaperOSC:
         try:
             with open(trigger_path, "w") as f:
                 f.write("dump")
-            # Chown to Reaper user
-            for pid_dir in glob.glob("/proc/[0-9]*"):
-                try:
-                    with open(f"{pid_dir}/cmdline", "rb") as f:
-                        if b"REAPER/reaper" in f.read():
-                            stat = os.stat(f"{pid_dir}")
-                            os.chown(trigger_path, stat.st_uid, stat.st_gid)
-                            break
-                except (OSError, PermissionError):
-                    continue
+            self._chown_to_reaper(trigger_path)
         except OSError as e:
             logger.warning("Failed to write state trigger: %s", e)
             return self._state

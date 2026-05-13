@@ -125,6 +125,10 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         "get_plugin_params": lambda: bridge.get_plugin_params(
             int(args["track"]), int(args["fx"]),
         ),
+        "list_track_fx": lambda: bridge.list_track_fx(
+            int(args["track"]),
+        ),
+        "list_available_plugins": lambda: bridge.list_available_plugins(),
         # Routing
         "create_send": lambda: bridge.create_send(
             int(args["source_track"]), int(args["dest_track"]),
