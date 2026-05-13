@@ -1,16 +1,25 @@
-"""AudioShuttle MCP server — exposes DAW control tools."""
+"""AudioShuttle MCP server — single-tool passthrough for DAW control.
+
+Architecture:
+    OpenCode (any LLM) → daw_command("mute the drums and solo guitar")
+        → E2B model translates natural language → JSON tool calls
+        → DAW bridge (Reaper/Ardour/etc.) executes
+        → Human-readable result back to the LLM
+
+The LLM calling this MCP server does NOT need to know DAW internals.
+It just speaks naturally and the domain expert model handles translation.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from fastmcp import FastMCP
 
 from audioshuttle.config import Settings
-from audioshuttle.context_manager import ContextManager
 from audioshuttle.model_server import ModelServer
-from audioshuttle.models import CommandResult
 from audioshuttle.osc_bridge import ReaperOSC
 from audioshuttle.translator import IntentTranslator
 
@@ -18,559 +27,351 @@ logger = logging.getLogger(__name__)
 
 
 def create_server(settings: Settings | None = None) -> FastMCP:
-    """Create an MCP server with DAW control tools.
+    """Create an MCP server with a single smart DAW control tool.
 
-    Args:
-        settings: Configuration. Uses defaults if not provided.
+    The server exposes two tools:
+    - daw_command: Natural language → model translation → DAW execution
+    - daw_state: Query current project state (tracks, transport, etc.)
 
-    Returns:
-        FastMCP server instance with tools registered.
+    This is DAW-agnostic — the model prompt adapts to the connected DAW.
+    Adding a new DAW only requires a new bridge class, not new MCP tools.
     """
     if settings is None:
         settings = Settings()
 
+    daw_name = "Reaper" if settings.daw_type == "reaper" else settings.daw_type.title()
+
     mcp = FastMCP(
         "AudioShuttle",
         instructions=(
-            "DAW control server for Reaper. Control tracks (volume, mute, solo, pan, "
-            "record arm), transport (play, stop, record, pause, seek), master volume/pan, "
-            "FX parameters and bypass, trigger Reaper actions, toggle repeat and metronome. "
-            "Use interpret_command for natural language commands like 'mute the drums' or "
-            "'turn up the vocals'. Track numbers start at 1. Volume is 0.0-1.0. "
-            "Pan is -1.0 (left) to 1.0 (right). FX and parameter indices are 0-based."
+            f"DAW control server connected to {daw_name}. "
+            "Use daw_command for ALL DAW operations — it understands natural language "
+            "and can execute multiple actions in one call. "
+            "Use daw_state to query the current project. "
+            "The internal domain model handles translation — you just speak naturally."
         ),
     )
 
-    bridge = ReaperOSC(
-        host=settings.reaper_host,
-        send_port=settings.reaper_port,
-        feedback_port=settings.reaper_feedback_port,
-    )
+    # ── DAW Bridge ──────────────────────────────────────────────
+    # Select bridge based on daw_type. Add more DAWs here.
+    if settings.daw_type == "reaper":
+        bridge = ReaperOSC(
+            host=settings.reaper_host,
+            send_port=settings.reaper_port,
+            feedback_port=settings.reaper_feedback_port,
+        )
+    else:
+        raise ValueError(f"Unsupported DAW: {settings.daw_type}")
 
-    # Start embedded model server (E2B on GPU) if enabled
+    # ── Domain Expert Model ─────────────────────────────────────
+    # Uses the E2B model for command translation.
+    # If the external model server at model_api_url is running, use it.
+    # Otherwise falls back to rule-based parsing.
     model_server: ModelServer | None = None
     if settings.model_enabled:
         model_server = ModelServer(settings)
+        # Don't start embedded server — use external if available
         try:
-            started = model_server.start(wait=True, timeout=60.0)
-            if started:
-                logger.info("E2B model server ready for intent translation")
+            import httpx
+            resp = httpx.get(
+                settings.model_api_url.replace("/v1/chat/completions", "/health"),
+                timeout=2.0,
+            )
+            if resp.status_code == 200:
+                logger.info("External model server detected — using for translation")
+                model_server.enable_external()
             else:
-                logger.warning(
-                    "E2B model server failed to start — fallback parser only"
-                )
+                logger.warning("Model server health check failed — rule-based only")
                 model_server = None
-        except Exception as e:
-            logger.warning("E2B model server error: %s — fallback parser only", e)
+        except Exception:
+            logger.warning("No model server available — rule-based only")
             model_server = None
 
     translator = IntentTranslator(model_server)
 
-    context_manager = ContextManager(
-        model_server=model_server,
-        vault_path=settings.memory_vault_path,
-    )
-
-    # ── State discovery tools ──────────────────────────────────
-
-    @mcp.tool()
-    def list_tracks() -> dict[str, Any]:
-        """List all tracks in the current Reaper project with their state.
-
-        Returns track number, name, volume, pan, mute, and solo status.
-        """
-        bridge.refresh_state()
-        tracks = [
-            {
-                "number": t.track_number,
-                "name": t.name,
-                "volume": t.volume,
-                "pan": t.pan,
-                "mute": t.mute,
-                "solo": t.solo,
-            }
-            for t in bridge.state.tracks
-        ]
-        return {"tracks": tracks, "count": len(tracks)}
-
-    @mcp.tool()
-    def get_transport() -> dict[str, Any]:
-        """Get current Reaper transport state (playback, recording, position)."""
-        t = bridge.state.transport
-        return {
-            "playing": t.playing,
-            "recording": t.recording,
-            "position_seconds": t.position_seconds,
-            "tempo": t.tempo,
-            "time_signature": t.time_signature,
-        }
-
-    @mcp.tool()
-    def get_daw_state() -> dict[str, Any]:
-        """Get full DAW state snapshot — all tracks, transport, and project info."""
-        bridge.refresh_state()
-        return {
-            "tracks": [
-                {
-                    "number": t.track_number,
-                    "name": t.name,
-                    "volume": t.volume,
-                    "pan": t.pan,
-                    "mute": t.mute,
-                    "solo": t.solo,
-                }
-                for t in bridge.state.tracks
-            ],
-            "transport": {
-                "playing": bridge.state.transport.playing,
-                "recording": bridge.state.transport.recording,
-                "position_seconds": bridge.state.transport.position_seconds,
-                "tempo": bridge.state.transport.tempo,
-            },
-            "track_count": bridge.state.track_count,
-            "master_volume": bridge.state.master_volume,
-            "master_pan": bridge.state.master_pan,
-            "project_name": bridge.state.project_name,
-            "connected": bridge.is_connected,
-        }
-
-    # ── Transport tools ────────────────────────────────────────
-
-    @mcp.tool()
-    def transport_control(action: str) -> dict[str, Any]:
-        """Control Reaper transport (play, stop, record, pause).
-
-        Args:
-            action: One of: play, stop, record, pause
-        """
-        action = action.lower().strip()
-        valid = {"play", "stop", "record", "pause"}
-        if action not in valid:
-            return {
-                "success": False,
-                "error": f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
-            }
-
-        result = getattr(bridge, f"transport_{action}")()
-        return {"success": result.success, "action": action}
-
-    # ── Track control tools ─────────────────────────────────────
-
-    @mcp.tool()
-    def set_track_volume(track: int, volume: float) -> dict[str, Any]:
-        """Set a track's volume level.
-
-        Args:
-            track: Track number (starts at 1)
-            volume: Volume level from 0.0 (silent) to 1.0 (max)
-        """
-        volume = max(0.0, min(1.0, volume))
-        result = bridge.set_track_volume(track, volume)
-        return {
-            "success": result.success,
-            "track": track,
-            "volume": volume,
-            "error": result.error,
-        }
-
-    @mcp.tool()
-    def set_track_mute(track: int, mute: bool) -> dict[str, Any]:
-        """Mute or unmute a track.
-
-        Args:
-            track: Track number (starts at 1)
-            mute: True to mute, False to unmute
-        """
-        result = bridge.set_track_mute(track, mute)
-        return {
-            "success": result.success,
-            "track": track,
-            "muted": mute,
-            "error": result.error,
-        }
-
-    @mcp.tool()
-    def set_track_solo(track: int, solo: bool) -> dict[str, Any]:
-        """Solo or unsolo a track.
-
-        Args:
-            track: Track number (starts at 1)
-            solo: True to solo, False to unsolo
-        """
-        result = bridge.set_track_solo(track, solo)
-        return {
-            "success": result.success,
-            "track": track,
-            "soloed": solo,
-            "error": result.error,
-        }
-
-    @mcp.tool()
-    def set_track_pan(track: int, pan: float) -> dict[str, Any]:
-        """Set a track's pan position.
-
-        Args:
-            track: Track number (starts at 1)
-            pan: Pan from -1.0 (full left) to 1.0 (full right), 0.0 is center
-        """
-        pan = max(-1.0, min(1.0, pan))
-        result = bridge.set_track_pan(track, pan)
-        return {
-            "success": result.success,
-            "track": track,
-            "pan": pan,
-            "error": result.error,
-        }
-
-    # ── Transport seek ──────────────────────────────────────────
-
-    @mcp.tool()
-    def transport_seek(position_seconds: float) -> dict[str, Any]:
-        """Seek to a specific position in the timeline.
-
-        Args:
-            position_seconds: Position in seconds from the start
-        """
-        if position_seconds < 0:
-            return {
-                "success": False,
-                "error": f"Position must be >= 0, got {position_seconds}",
-            }
-        result = bridge.transport_seek(position_seconds)
-        return {
-            "success": result.success,
-            "position_seconds": position_seconds,
-            "error": result.error,
-        }
-
-    # ── Track discovery ─────────────────────────────────────────
-
-    @mcp.tool()
-    def get_track_count() -> dict[str, Any]:
-        """Get the number of tracks in the current Reaper project."""
-        count = bridge.get_track_count_real()
-        return {"track_count": count}
-
-    # ── Master control ──────────────────────────────────────────
-
-    @mcp.tool()
-    def set_master_volume(volume: float) -> dict[str, Any]:
-        """Set the master track volume.
-
-        Args:
-            volume: Volume from 0.0 (silent) to 1.0 (max)
-        """
-        volume = max(0.0, min(1.0, volume))
-        result = bridge.set_master_volume(volume)
-        return {
-            "success": result.success,
-            "volume": volume,
-            "error": result.error,
-        }
-
-    @mcp.tool()
-    def set_master_pan(pan: float) -> dict[str, Any]:
-        """Set the master track pan position.
-
-        Args:
-            pan: Pan from -1.0 (full left) to 1.0 (full right), 0.0 is center
-        """
-        pan = max(-1.0, min(1.0, pan))
-        result = bridge.set_master_pan(pan)
-        return {
-            "success": result.success,
-            "pan": pan,
-            "error": result.error,
-        }
-
-    # ── FX control ──────────────────────────────────────────────
-
-    @mcp.tool()
-    def set_fx_param(track: int, fx: int, param: int, value: float) -> dict[str, Any]:
-        """Set an FX plugin parameter value. FX and param indices are 0-based.
-
-        Args:
-            track: Track number (starts at 1)
-            fx: FX plugin index on the track (starts at 0)
-            param: Parameter index within the FX (starts at 0)
-            value: Parameter value from 0.0 to 1.0
-        """
-        result = bridge.set_fx_param(track, fx, param, value)
-        return {
-            "success": result.success,
-            "track": track,
-            "fx": fx,
-            "param": param,
-            "value": max(0.0, min(1.0, value)),
-            "error": result.error,
-        }
-
-    @mcp.tool()
-    def fx_bypass(track: int, fx: int, bypass: bool) -> dict[str, Any]:
-        """Bypass or enable an FX plugin on a track.
-
-        Args:
-            track: Track number (starts at 1)
-            fx: FX index on the track (starts at 0)
-            bypass: True to bypass, False to enable
-        """
-        result = bridge.fx_bypass(track, fx, bypass)
-        return {
-            "success": result.success,
-            "track": track,
-            "fx": fx,
-            "bypassed": bypass,
-            "error": result.error,
-        }
-
-    # ── Action triggering ───────────────────────────────────────
-
-    @mcp.tool()
-    def trigger_action(command_id: int) -> dict[str, Any]:
-        """Trigger a Reaper action by its command ID. Use this for any Reaper action not covered by other tools.
-
-        Args:
-            command_id: Reaper action command ID (positive integer, e.g. 40025 for 'Go to marker 1')
-        """
-        if command_id <= 0:
-            return {
-                "success": False,
-                "error": f"command_id must be > 0, got {command_id}",
-            }
-        result = bridge.trigger_action(command_id)
-        return {
-            "success": result.success,
-            "action_id": command_id,
-            "error": result.error,
-        }
-
-    # ── Track arm ───────────────────────────────────────────────
-
-    @mcp.tool()
-    def set_track_arm(track: int, arm: bool) -> dict[str, Any]:
-        """Arm or disarm a track for recording.
-
-        Args:
-            track: Track number (starts at 1)
-            arm: True to arm for recording, False to disarm
-        """
-        result = bridge.set_track_recarm(track, arm)
-        return {
-            "success": result.success,
-            "track": track,
-            "armed": arm,
-            "error": result.error,
-        }
-
-    # ── Toggles ─────────────────────────────────────────────────
-
-    @mcp.tool()
-    def toggle_repeat() -> dict[str, Any]:
-        """Toggle repeat on/off in Reaper."""
-        result = bridge.toggle_repeat()
-        return {
-            "success": result.success,
-            "toggled": "repeat",
-            "error": result.error,
-        }
-
-    @mcp.tool()
-    def toggle_metronome() -> dict[str, Any]:
-        """Toggle the metronome/click on/off."""
-        result = bridge.toggle_metronome()
-        return {
-            "success": result.success,
-            "toggled": "metronome",
-            "error": result.error,
-        }
-
-    # ── Natural language command interpreter ──────────────────
-
-    @mcp.tool()
-    def interpret_command(command: str) -> dict[str, Any]:
-        """Interpret a natural language command and execute it.
-
-        Translates natural language like 'mute the drums' or 'turn up the vocals'
-        into the appropriate DAW tool call and executes it.
-
-        Args:
-            command: Natural language command (e.g., 'mute the drums', 'seek to 30 seconds')
-        """
-        # Get current DAW state for context
-        state = bridge.state
-
-        # Record user command to context
-        context_manager.add("user", command)
-
-        # Translate
-        result = translator.translate(command, state)
-
-        if not result.success:
-            context_manager.add("assistant", f"✗ Error: {result.error} [{result.method}]")
-            return {
-                "success": False,
-                "error": result.error,
-                "method": result.method,
-                "suggestion": "Try commands like: 'mute the drums', 'play', 'turn up vocals'",
-            }
-
-        # Execute the translated tool call
-        tool_name = result.tool
-        tool_args = result.args
-
-        # Map tool names to bridge methods
+    # ── Tool executor map ───────────────────────────────────────
+    # Maps tool names from the translator to bridge methods.
+    # This is DAW-specific but hidden from the calling LLM.
+    def _execute_tool(name: str, args: dict) -> Any:
+        """Execute a translated tool call on the DAW bridge."""
         tool_map = {
-            "transport_control": lambda: bridge.transport_play()
-            if tool_args.get("action") == "play"
-            else bridge.transport_stop()
-            if tool_args.get("action") == "stop"
-            else bridge.transport_record()
-            if tool_args.get("action") == "record"
-            else bridge.transport_pause()
-            if tool_args.get("action") == "pause"
-            else None,
+            "transport_control": lambda: (
+                bridge.transport_play() if args.get("action") == "play"
+                else bridge.transport_stop() if args.get("action") == "stop"
+                else bridge.transport_record() if args.get("action") == "record"
+                else bridge.transport_pause() if args.get("action") == "pause"
+                else None
+            ),
             "transport_seek": lambda: bridge.transport_seek(
-                float(tool_args.get("position_seconds", 0))
+                float(args.get("position_seconds", 0))
             ),
             "set_track_volume": lambda: bridge.set_track_volume(
-                int(tool_args["track"]), float(tool_args["volume"])
+                int(args["track"]), float(args["volume"])
             ),
             "set_track_mute": lambda: bridge.set_track_mute(
-                int(tool_args["track"]), bool(tool_args["mute"])
+                int(args["track"]), bool(args["mute"])
             ),
             "set_track_solo": lambda: bridge.set_track_solo(
-                int(tool_args["track"]), bool(tool_args["solo"])
+                int(args["track"]), bool(args["solo"])
             ),
             "set_track_pan": lambda: bridge.set_track_pan(
-                int(tool_args["track"]), float(tool_args["pan"])
+                int(args["track"]), float(args["pan"])
             ),
             "set_master_volume": lambda: bridge.set_master_volume(
-                float(tool_args["volume"])
+                float(args["volume"])
             ),
             "set_master_pan": lambda: bridge.set_master_pan(
-                float(tool_args["pan"])
-            ),
-            "set_fx_param": lambda: bridge.set_fx_param(
-                int(tool_args["track"]),
-                int(tool_args["fx"]),
-                int(tool_args["param"]),
-                float(tool_args["value"]),
-            ),
-            "fx_bypass": lambda: bridge.fx_bypass(
-                int(tool_args["track"]),
-                int(tool_args["fx"]),
-                bool(tool_args["bypass"]),
-            ),
-            "trigger_action": lambda: bridge.trigger_action(
-                int(tool_args["command_id"])
+                float(args["pan"])
             ),
             "set_track_arm": lambda: bridge.set_track_recarm(
-                int(tool_args["track"]), bool(tool_args["arm"])
-            ),
-            "toggle_repeat": lambda: bridge.toggle_repeat(),
-            "toggle_metronome": lambda: bridge.toggle_metronome(),
-            "set_tempo": lambda: bridge.set_tempo(float(tool_args["bpm"])),
-            "insert_track": lambda: bridge.insert_track(),
-            "rename_track": lambda: bridge.rename_track(
-                int(tool_args["track"]), str(tool_args["name"]),
-            ),
-            "insert_midi_pattern": lambda: bridge.insert_midi_pattern(
-                str(tool_args.get("role", "drums")),
+                int(args["track"]), bool(args["arm"])
             ),
             "set_track_color": lambda: bridge.set_track_color(
-                int(tool_args["track"]), str(tool_args["color"]),
+                int(args["track"]), str(args["color"])
             ),
             "set_track_monitor": lambda: bridge.set_track_monitor(
-                int(tool_args["track"]), int(tool_args["mode"]),
+                int(args["track"]), int(args["mode"])
             ),
             "set_track_auto_mode": lambda: bridge.set_track_auto_mode(
-                int(tool_args["track"]), str(tool_args["mode"]),
+                int(args["track"]), str(args["mode"])
             ),
             "set_track_send_volume": lambda: bridge.set_track_send_volume(
-                int(tool_args["track"]), int(tool_args["send"]), float(tool_args["volume"]),
+                int(args["track"]), int(args["send"]), float(args["volume"])
+            ),
+            "set_fx_param": lambda: bridge.set_fx_param(
+                int(args["track"]), int(args["fx"]),
+                int(args["param"]), float(args["value"])
+            ),
+            "fx_bypass": lambda: bridge.fx_bypass(
+                int(args["track"]), int(args["fx"]), bool(args["bypass"])
             ),
             "fx_next_preset": lambda: bridge.fx_next_preset(
-                int(tool_args["track"]), int(tool_args["fx"]),
+                int(args["track"]), int(args["fx"])
             ),
             "fx_prev_preset": lambda: bridge.fx_prev_preset(
-                int(tool_args["track"]), int(tool_args["fx"]),
+                int(args["track"]), int(args["fx"])
             ),
             "fx_set_wetdry": lambda: bridge.fx_set_wetdry(
-                int(tool_args["track"]), int(tool_args["fx"]), float(tool_args["value"]),
+                int(args["track"]), int(args["fx"]), float(args["value"])
             ),
-            "goto_marker": lambda: bridge.goto_marker(int(tool_args["marker"])),
+            "set_tempo": lambda: bridge.set_tempo(float(args["bpm"])),
+            "insert_track": lambda: bridge.insert_track(),
+            "rename_track": lambda: bridge.rename_track(
+                int(args["track"]), str(args["name"])
+            ),
+            "insert_midi_pattern": lambda: bridge.insert_midi_pattern(
+                str(args.get("role", "drums")),
+                track=int(args["track"]) if "track" in args else None,
+            ),
+            "create_song_structure": lambda: bridge.create_song_structure(
+                list(args["sections"]),
+                bpm=int(args["bpm"]) if "bpm" in args else None,
+            ),
+            "generate_project": lambda: bridge.generate_project(
+                sections=list(args["sections"]),
+                instruments=list(args["instruments"]),
+                key=str(args.get("key", "C")),
+                scale=str(args.get("scale", "major")),
+                bpm=int(args.get("bpm", 120)),
+            ),
+            "goto_marker": lambda: bridge.goto_marker(int(args["marker"])),
             "set_marker_name": lambda: bridge.set_marker_name(
-                int(tool_args["marker"]), str(tool_args["name"]),
+                int(args["marker"]), str(args["name"])
             ),
             "set_loop_points": lambda: bridge.set_loop_points(
-                float(tool_args["start"]), float(tool_args["end"]),
+                float(args["start"]), float(args["end"])
             ),
             "undo": lambda: bridge.undo(),
             "redo": lambda: bridge.redo(),
+            "toggle_repeat": lambda: bridge.toggle_repeat(),
+            "toggle_metronome": lambda: bridge.toggle_metronome(),
+            "trigger_action": lambda: bridge.trigger_action(
+                int(args["command_id"])
+            ),
         }
 
-        # Discovery tools (no bridge method to call, just return state)
-        if tool_name in ("list_tracks", "get_transport", "get_daw_state", "get_track_count"):
-            return {
-                "success": True,
-                "tool": tool_name,
-                "args": tool_args,
-                "method": result.method,
-                "note": "Discovery tool — use the dedicated tool directly for state queries",
-            }
-
-        executor = tool_map.get(tool_name)
+        executor = tool_map.get(name)
         if executor is None:
-            return {
-                "success": False,
-                "error": f"No executor for tool: {tool_name}",
-                "method": result.method,
-            }
+            return None
+        return executor()
 
-        cmd_result = executor()
-        context_manager.add(
-            "assistant",
-            f"→ {tool_name}({tool_args}) [{result.method}]",
-        )
-        return {
-            "success": cmd_result.success,
-            "tool": tool_name,
-            "args": tool_args,
-            "method": result.method,
-            "osc_address": cmd_result.address,
-            "error": cmd_result.error,
-        }
+    # ── THE Tool: daw_command ───────────────────────────────────
 
     @mcp.tool()
-    def transcribe_audio(audio_path: str) -> str:
-        """Transcribe an audio file to text using Whisper.
+    def daw_command(command: str) -> dict[str, Any]:
+        """Execute a natural language DAW command via domain expert model.
 
-        Requires audioshuttle[stt] optional dependency (faster-whisper).
-        Returns transcribed text that can be used as a voice command.
+        Understands compound commands, track names, and musical terms.
+        Translates via Gemma E2B model, then executes on the connected DAW.
+
+        Examples:
+            "mute the drums and solo the guitar"
+            "set tempo to 140"
+            "add reverb on track 3"
+            "create a project in C major with drums bass melody keys, 16-bar verse 8-bar chorus"
+            "rename track 5 to bass and arm it"
+            "play"
+            "undo"
+            "go to marker 2"
 
         Args:
-            audio_path: Path to audio file (WAV, MP3, OGG, WEBM, etc.)
+            command: Natural language DAW command. Can be multiple actions.
         """
-        from audioshuttle.stt import STTEngine
+        # Get live DAW state for context
+        state = bridge.state
+        if hasattr(bridge, "refresh_state"):
+            try:
+                state = bridge.refresh_state(wait=0.3)
+            except Exception:
+                pass
 
-        engine = STTEngine(
-            model_size=settings.stt_model_size,
-            device=settings.stt_device,
-            compute_type=settings.stt_compute_type,
-        )
+        # Translate natural language → structured tool calls
+        results = translator.translate_multi(command, state)
 
-        if not engine.available:
-            return (
-                "Error: faster-whisper not installed. "
-                "Install with: pip install audioshuttle[stt]"
-            )
+        if not results:
+            return {
+                "success": False,
+                "error": "Could not translate command",
+                "command": command,
+            }
 
+        # Execute each translated tool call
+        executed = []
+        errors = []
+        for r in results:
+            if not r.success:
+                errors.append(f"{r.tool}: {r.error}")
+                continue
+
+            tool_name = r.tool
+            tool_args = r.args
+
+            # Discovery tools — return state instead of executing
+            if tool_name in ("list_tracks", "get_transport",
+                             "get_daw_state", "get_track_count"):
+                executed.append({
+                    "tool": tool_name,
+                    "action": "query",
+                    "note": "State query — use daw_state for details",
+                })
+                continue
+
+            cmd_result = _execute_tool(tool_name, tool_args)
+
+            if cmd_result is None:
+                errors.append(f"Unknown tool: {tool_name}")
+                continue
+
+            executed.append({
+                "tool": tool_name,
+                "args": tool_args,
+                "success": cmd_result.success if hasattr(cmd_result, "success") else True,
+                "detail": (
+                    cmd_result.reaper_feedback
+                    if hasattr(cmd_result, "reaper_feedback") and cmd_result.reaper_feedback
+                    else None
+                ),
+                "error": cmd_result.error if hasattr(cmd_result, "error") and cmd_result.error else None,
+            })
+
+        # Build summary
+        success_count = sum(1 for e in executed if e.get("success", True))
+        total = len(executed)
+
+        summary_parts = []
+        for e in executed:
+            if e.get("action") == "query":
+                continue
+            if e.get("success"):
+                detail = e.get("detail", "")
+                if detail:
+                    summary_parts.append(detail)
+                else:
+                    summary_parts.append(f"✓ {e['tool']}({e.get('args', {})})")
+            else:
+                summary_parts.append(f"✗ {e['tool']}: {e.get('error', 'failed')}")
+
+        return {
+            "success": total > 0 and len(errors) == 0,
+            "command": command,
+            "executed": total,
+            "results": executed,
+            "errors": errors,
+            "summary": "\n".join(summary_parts) if summary_parts else "No actions taken",
+        }
+
+    # ── State Query Tool ────────────────────────────────────────
+
+    @mcp.tool()
+    def daw_state() -> dict[str, Any]:
+        """Get current DAW project state: tracks, transport, master.
+
+        Returns track names, volumes, mute/solo/arm states, transport
+        position, tempo, and recording status.
+        """
+        # Try to get fresh state via watcher
+        raw_state = None
+        if hasattr(bridge, "refresh_state"):
+            try:
+                raw_state = bridge.refresh_state(wait=0.5)
+            except Exception:
+                pass
+
+        if not raw_state:
+            return {
+                "connected": bridge.is_connected,
+                "tracks": [],
+                "transport": {"playing": False, "tempo": 0},
+                "error": "No DAW state available" if not bridge.is_connected else None,
+            }
+
+        # Read from the watcher's JSON dump for full state
+        tracks = []
+        if hasattr(bridge, "state") and bridge.state:
+            for t in bridge.state.tracks:
+                track_info = {
+                    "number": t.track_number,
+                    "name": t.name or f"Track {t.track_number}",
+                    "volume": round(t.volume, 2),
+                    "pan": round(t.pan, 2),
+                    "muted": t.mute,
+                    "soloed": t.solo,
+                }
+                tracks.append(track_info)
+
+        # Try to get extended state (armed, color) from raw watcher data
         try:
-            text = engine.transcribe(audio_path)
-            return text
-        except FileNotFoundError as e:
-            return f"Error: {e}"
-        except RuntimeError as e:
-            return f"Error: {e}"
+            import json as _json
+            watcher_path = "/tmp/audioshuttle_daw_state.json"
+            with open(watcher_path) as f:
+                watcher_data = _json.load(f)
+            for wt in watcher_data.get("tracks", []):
+                for t in tracks:
+                    if t["number"] == wt["number"]:
+                        t["armed"] = wt.get("recarm", False)
+                        t["color"] = wt.get("color", "#000000")
+                        break
+            transport_data = watcher_data.get("transport", {})
+            transport = {
+                "playing": transport_data.get("playing", False),
+                "recording": transport_data.get("recording", False),
+                "position_seconds": round(transport_data.get("position", 0), 1),
+                "tempo": round(transport_data.get("tempo", 120), 0),
+            }
+        except Exception:
+            transport = {
+                "playing": False,
+                "recording": False,
+                "position_seconds": 0,
+                "tempo": 120,
+            }
+
+        return {
+            "connected": bridge.is_connected,
+            "daw": settings.daw_type,
+            "track_count": raw_state.track_count if raw_state else 0,
+            "tracks": tracks,
+            "transport": transport,
+        }
 
     return mcp

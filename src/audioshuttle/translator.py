@@ -46,7 +46,10 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     # Track management
     "insert_track": {},
     "rename_track": {"track": int, "name": str},
-    "insert_midi_pattern": {"role": str},
+    "insert_midi_pattern": {"role": str, "track": int | None},
+    # Song structure & project generation
+    "create_song_structure": {"sections": list, "bpm": int | None},
+    "generate_project": {"sections": list, "instruments": list, "key": str, "scale": str, "bpm": int},
     # FX
     "set_fx_param": {"track": int, "fx": int, "param": int, "value": float},
     "fx_bypass": {"track": int, "fx": int, "bypass": bool},
@@ -106,8 +109,22 @@ Track controls:
 Track management:
 - insert_track — args: {}
 - rename_track — args: {"track": int, "name": str}
-- insert_midi_pattern — args: {"role": str} — roles: "drums", "bass", "chords"
-  Always pair with insert_track. The pattern needs a track to land on.
+- insert_midi_pattern — args: {"role": str, "track": int|optional} — roles: "drums", "bass", "chords", "melody"
+  If user says "on the bass track" or "on track 5", include the track number.
+  If no target track given, pair with insert_track first (creates new track).
+  Examples: "add melody on the bass" → track=5 (if bass is T5), "add drums" → no track (insert_track first).
+
+Song structure & project generation:
+- create_song_structure — args: {"sections": [{"name": str, "bars": int}, ...], "bpm": int|optional}
+  Creates timeline markers for song sections. User says "16-bar verse, 8-bar chorus" → expand into named instances.
+- generate_project — args: {"sections": list, "instruments": list, "key": str, "scale": str, "bpm": int}
+  Creates a complete project: markers + tracks + key-aware MIDI patterns.
+  instruments: any of "drums", "bass", "melody", "keys", "strings", "rhythm"
+  key: C, D, E, F, G, A, B (with # or b for sharps/flats)
+  scale: "major", "minor", "pentatonic", "blues"
+  This is a SINGLE command — do NOT break it into multiple tool calls.
+  Example: "create a project in C major with drums bass melody keys, 16-bar verse 8-bar chorus" →
+    {"tool": "generate_project", "args": {"sections": [{"name": "Verse", "bars": 16}, {"name": "Chorus", "bars": 8}], "instruments": ["drums", "bass", "melody", "keys"], "key": "C", "scale": "major", "bpm": 120}}
 
 Master:
 - set_master_volume — args: {"volume": float}
@@ -140,6 +157,8 @@ Example: If DAW has 4 tracks and user says "add 2 tracks named guitar and bass":
 
 Multi-command examples:
   "add a drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
+  "add melody on the bass track" (bass is T5) → [{"tool":"insert_midi_pattern","args":{"role":"melody","track":5}}]
+  "add rhythm on track 3" → [{"tool":"insert_midi_pattern","args":{"role":"drums","track":3}}]
   "add 3 tracks and set tempo to 140" → [{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"insert_track","args":{}},{"tool":"set_tempo","args":{"bpm":140}}]
   "add a bass track and name it bass" (DAW has 3 tracks) → [{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":4,"name":"bass"}}]
   "add drums and mute track 3" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}},{"tool":"set_track_mute","args":{"track":3,"mute":true}}]
@@ -155,6 +174,8 @@ Multi-command examples:
   "set up for recording: arm track 1, monitor on, click track on, record" → [{"tool":"set_track_arm","args":{"track":1,"arm":true}},{"tool":"set_track_monitor","args":{"track":1,"mode":1}},{"tool":"toggle_metronome","args":{}},{"tool":"transport_control","args":{"action":"record"}}]
   "put track 3 in write mode" → [{"tool":"set_track_auto_mode","args":{"track":3,"mode":"write"}}]
   "set guitar to latch mode" (guitar is track 3) → [{"tool":"set_track_auto_mode","args":{"track":3,"mode":"latch"}}]
+  "add markers for a song: 16-bar verse and 8-bar chorus, verse, chorus" → [{"tool":"create_song_structure","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16},{"name":"Chorus","bars":8}],"bpm":120}}]
+  "create a project in D minor with drums bass and melody, verse chorus verse" → [{"tool":"generate_project","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16}],"instruments":["drums","bass","melody"],"key":"D","scale":"minor","bpm":120}}]
   "change automation to touch on track 2" → [{"tool":"set_track_auto_mode","args":{"track":2,"mode":"touch"}}]
   "send track 1 to track 3" → [{"tool":"set_track_send_volume","args":{"track":1,"send":0,"volume":1.0}}]
   "set the send level from guitar to drums lower" (guitar=3, drums=4) → [{"tool":"set_track_send_volume","args":{"track":3,"send":0,"volume":0.3}}]
@@ -182,6 +203,9 @@ Keyword-to-tool mapping (CRITICAL — use these mappings):
   "redo" → redo
   "go to marker" / "jump to marker" → goto_marker
   "name marker" / "rename marker" → set_marker_name
+  "add markers" / "song structure" / "verse and chorus" → create_song_structure
+  "create project" / "generate project" / "set up a song" / "new project" → generate_project
+  "in key of X" / "in C" / "in D minor" / "key of G" → key parameter for generate_project
 
 Rules:
 - Match track NAMES to find track NUMBER from the DAW state
@@ -294,7 +318,7 @@ class IntentTranslator:
         ]
 
         raw = self._model_server.chat(
-            messages, temperature=0.1, max_tokens=1024
+            messages, temperature=0.1, max_tokens=2048
         )
         if raw is None:
             return [TranslationResult(

@@ -112,7 +112,9 @@ class STTEngine:
             language="en",  # Force English for DAW commands
             no_speech_threshold=0.6,  # Filter out non-speech
             condition_on_previous_text=False,  # Each utterance is independent
-            hotwords="DAW command: mute solo arm record play stop track volume tempo",
+            hotwords="DAW command: mute solo arm record play stop track volume tempo "
+                     "melody rhythm bass drums guitar chord harmony insert midi "
+                     "pattern loop marker rename monitor automation preset reverb",
         )
         text = " ".join(segment.text.strip() for segment in segments)
         logger.debug(

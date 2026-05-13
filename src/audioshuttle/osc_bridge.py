@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import time
+import io
+import tempfile
 from collections import deque
 from typing import Any
 
@@ -538,14 +540,18 @@ class ReaperOSC:
             )
         return self.send_command(f"/track/{track}/name", name)
 
-    def insert_midi_pattern(self, role: str = "drums") -> CommandResult:
+    def insert_midi_pattern(
+        self, role: str = "drums", track: int | None = None,
+    ) -> CommandResult:
         """Generate a MIDI pattern and import it into Reaper.
 
         Creates a .mid file and triggers Reaper's media import action.
-        Supported roles: drums, bass, chords.
+        Supported roles: drums, bass, chords, melody, lead.
 
         Args:
-            role: Pattern type (drums, bass, chords).
+            role: Pattern type (drums, bass, chords, melody, lead).
+            track: Optional track number to target (selects before import).
+                   If None, Reaper uses the currently selected track.
         """
         try:
             from midiutil import MIDIFile
@@ -560,59 +566,80 @@ class ReaperOSC:
         import tempfile
 
         role = role.lower().strip()
+
+        # Select target track BEFORE generating/importing MIDI
+        # We pass the track number in the trigger file so the Lua watcher
+        # can select the right track INSIDE Reaper (avoids OSC race conditions)
+        target_track = track  # will be written into trigger file
+
         midi = MIDIFile(1)
-        track = 0
+        mtrack = 0
         tempo = 120  # Will match project tempo
 
         if role in ("drums", "drum", "beat", "kick"):
             channel = 9  # MIDI channel 10 (drums)
-            midi.addTempo(track, 0, tempo)
+            midi.addTempo(mtrack, 0, tempo)
             for bar in range(4):
                 off = bar * 4
                 # Hi-hat 8th notes
                 for b in range(8):
-                    midi.addNote(track, channel, 42, off + b * 0.5, 0.5, 100)
+                    midi.addNote(mtrack, channel, 42, off + b * 0.5, 0.5, 100)
                 # Kick on 1, 3
-                midi.addNote(track, channel, 36, off, 1, 120)
-                midi.addNote(track, channel, 36, off + 2, 1, 120)
+                midi.addNote(mtrack, channel, 36, off, 1, 120)
+                midi.addNote(mtrack, channel, 36, off + 2, 1, 120)
                 # Snare on 2, 4
-                midi.addNote(track, channel, 38, off + 1, 1, 120)
-                midi.addNote(track, channel, 38, off + 3, 1, 120)
+                midi.addNote(mtrack, channel, 38, off + 1, 1, 120)
+                midi.addNote(mtrack, channel, 38, off + 3, 1, 120)
 
         elif role in ("bass",):
             channel = 0
-            midi.addTempo(track, 0, tempo)
+            midi.addTempo(mtrack, 0, tempo)
             # Simple bass line: root note on each beat
             for bar in range(4):
                 off = bar * 4
                 for beat in range(4):
-                    midi.addNote(track, channel, 36, off + beat, 0.9, 100)
+                    midi.addNote(mtrack, channel, 36, off + beat, 0.9, 100)
 
         elif role in ("chords", "keys", "pad"):
             channel = 0
-            midi.addTempo(track, 0, tempo)
+            midi.addTempo(mtrack, 0, tempo)
             # Simple chord hits on beats 1 and 3
             for bar in range(4):
                 off = bar * 4
                 for note in (60, 64, 67):  # C major
-                    midi.addNote(track, channel, note, off, 2, 80)
-                    midi.addNote(track, channel, note, off + 2, 2, 80)
+                    midi.addNote(mtrack, channel, note, off, 2, 80)
+                    midi.addNote(mtrack, channel, note, off + 2, 2, 80)
+
+        elif role in ("melody", "lead", "line"):
+            channel = 0
+            midi.addTempo(mtrack, 0, tempo)
+            # Simple melody: ascending/descending scale pattern
+            scale = [60, 62, 64, 65, 67, 69, 71, 72]  # C major scale
+            for bar in range(4):
+                off = bar * 4
+                # Ascending on beats 1-2, descending on beats 3-4
+                for i in range(4):
+                    note = scale[(bar * 4 + i) % len(scale)]
+                    midi.addNote(mtrack, channel, note, off + i, 0.9, 90)
+
         else:
             return CommandResult(
                 success=False,
                 address="/action",
-                error=f"Unknown pattern role: {role}. Use: drums, bass, chords",
+                error=f"Unknown pattern role: {role}. Use: drums, bass, chords, melody",
             )
 
-        # Write MIDI file
+        # Write MIDI file — name it descriptively so if Reaper auto-names
+        # the track after the file, it's at least meaningful
         buf = io.BytesIO()
         midi.writeFile(buf)
-        midi_path = os.path.join(tempfile.gettempdir(), "audioshuttle_pattern.mid")
+        midi_filename = f"audioshuttle_{role}.mid"
+        midi_path = os.path.join(tempfile.gettempdir(), midi_filename)
         with open(midi_path, "wb") as f:
             f.write(buf.getvalue())
 
         # Also copy to home dir for easy access
-        home_copy = os.path.expanduser("~/audioshuttle_pattern.mid")
+        home_copy = os.path.expanduser(f"~/audioshuttle_{role}.mid")
         try:
             with open(home_copy, "wb") as f:
                 f.write(buf.getvalue())
@@ -643,9 +670,13 @@ class ReaperOSC:
 
         # Create trigger file owned by Reaper's user (needed for sticky-bit /tmp)
         # The __startup.lua watcher runs as korphaus and needs to os.remove() it
+        # Trigger format: "import" or "import:track:N" for targeting a specific track
+        trigger_content = "import"
+        if target_track is not None:
+            trigger_content = f"import:track:{target_track}"
         try:
             with open(trigger_path, "w") as f:
-                f.write("import")
+                f.write(trigger_content)
             # Find Reaper's UID and chown the trigger file
             import glob as _glob
             for pid_dir in _glob.glob("/proc/[0-9]*"):
@@ -688,6 +719,401 @@ class ReaperOSC:
             reaper_feedback=f"{role} pattern → {home_copy}"
             + (" (imported)" if imported else " (file saved, Reaper CLI not found)"),
         )
+
+    # ── Key-aware pattern helpers ──────────────────────────────────────
+
+    # Musical key → semitone offset from C
+    _KEY_OFFSETS: dict[str, int] = {
+        "c": 0, "c#": 1, "db": 1, "d": 2, "d#": 3, "eb": 3,
+        "e": 4, "f": 5, "f#": 6, "gb": 6, "g": 7, "g#": 8,
+        "ab": 8, "a": 9, "a#": 10, "bb": 10, "b": 11,
+    }
+
+    # Scale intervals (semitones from root)
+    _SCALES: dict[str, list[int]] = {
+        "major": [0, 2, 4, 5, 7, 9, 11],
+        "minor": [0, 2, 3, 5, 7, 8, 10],
+        "pentatonic": [0, 2, 4, 7, 9],
+        "blues": [0, 3, 5, 6, 7, 10],
+    }
+
+    @classmethod
+    def _scale_notes(cls, key: str, scale: str = "major",
+                     octave: int = 4) -> list[int]:
+        """Return MIDI note numbers for the given key/scale/octave."""
+        root = cls._KEY_OFFSETS.get(key.lower().strip(), 0)
+        intervals = cls._SCALES.get(scale.lower().strip(),
+                                     cls._SCALES["major"])
+        base = 12 * (octave + 1) + root  # MIDI note: octave 4 = C4 = 60
+        return [base + iv for iv in intervals]
+
+    @classmethod
+    def _chord_notes(cls, key: str, scale: str = "major",
+                     degree: int = 0, octave: int = 4) -> list[int]:
+        """Return triad MIDI notes for a scale degree (0-based)."""
+        notes = cls._scale_notes(key, scale, octave)
+        # Extend scale into next octave for chord tones
+        notes_extended = notes + [n + 12 for n in notes]
+        return [notes_extended[degree % len(notes)],
+                notes_extended[(degree + 2) % len(notes_extended)],
+                notes_extended[(degree + 4) % len(notes_extended)]]
+
+    # ── Song structure & project generation ───────────────────────────
+
+    def create_song_structure(
+        self,
+        sections: list[dict[str, str | int]],
+        bpm: int | None = None,
+    ) -> CommandResult:
+        """Create timeline markers for song structure.
+
+        Args:
+            sections: List of {"name": "Verse 1", "bars": 16}, ...
+            bpm: Optional tempo to set before creating markers.
+        """
+        if bpm:
+            self.set_tempo(bpm)
+            tempo = bpm
+        else:
+            # Use current tempo from state
+            tempo = 120
+            if hasattr(self, "state") and self.state:
+                tempo = getattr(self.state, "tempo", 120) or 120
+
+        # Build marker trigger file content
+        lines = [f"tempo:{int(tempo)}"]
+        bar_offset = 0
+        for section in sections:
+            name = str(section.get("name", "Section"))
+            bars = int(section.get("bars", 8))
+            lines.append(f"bar:{bar_offset}:{name}")
+            bar_offset += bars
+
+        # Write trigger file for Lua watcher
+        trigger_path = "/tmp/audioshuttle_markers_trigger"
+        try:
+            with open(trigger_path, "w") as f:
+                f.write("\n".join(lines))
+            # Chown to Reaper user
+            import glob as _glob
+            for pid_dir in _glob.glob("/proc/[0-9]*"):
+                try:
+                    with open(f"{pid_dir}/cmdline", "rb") as pf:
+                        if b"REAPER/reaper" in pf.read():
+                            import os as _os
+                            stat = _os.stat(f"{pid_dir}")
+                            _os.chown(trigger_path, stat.st_uid, stat.st_gid)
+                            break
+                except (OSError, PermissionError):
+                    continue
+        except OSError as e:
+            return CommandResult(
+                success=False, address="/markers",
+                error=f"Failed to write markers trigger: {e}",
+            )
+
+        # Wait for watcher to consume
+        import time
+        for _ in range(15):
+            time.sleep(0.2)
+            if not os.path.exists(trigger_path):
+                break
+
+        section_desc = ", ".join(
+            f"{s['name']} ({s['bars']} bars)" for s in sections
+        )
+        self._log_command(
+            "create_song_structure",
+            f"Created markers: {section_desc} at {int(tempo)} BPM",
+        )
+        return CommandResult(
+            success=True, address="/markers",
+            reaper_feedback=f"Structure: {section_desc} at {int(tempo)} BPM",
+        )
+
+    def generate_project(
+        self,
+        sections: list[dict[str, str | int]],
+        instruments: list[str],
+        key: str = "C",
+        scale: str = "major",
+        bpm: int = 120,
+    ) -> CommandResult:
+        """Generate a complete project: structure markers + tracks + MIDI.
+
+        Args:
+            sections: Song sections, e.g. [{"name": "Verse", "bars": 16}, ...]
+            instruments: Instruments to create, e.g. ["drums", "bass", "melody", "keys"]
+            key: Musical key (C, D, E, etc.) — may include scale like "D minor"
+            scale: Scale type (major, minor, pentatonic, blues)
+            bpm: Tempo in BPM
+        """
+        try:
+            from midiutil import MIDIFile
+        except ImportError:
+            return CommandResult(
+                success=False, address="/project",
+                error="midiutil not installed",
+            )
+
+        import time
+        import glob as _glob
+
+        # Parse "D minor" style key strings
+        key = str(key).strip()
+        for s in ("minor", "major", "pentatonic", "blues"):
+            if key.lower().endswith(s):
+                scale = s
+                key = key[: -(len(s))].strip()
+                break
+        key = key.upper()
+        # Keep sharps/flats: "C#" not just "C"
+        if len(key) > 1 and key[1] in ("#", "B"):
+            key = key[:2]
+        else:
+            key = key[0]
+
+        logger.info(
+            "generate_project: key=%s scale=%s bpm=%d instruments=%s sections=%s",
+            key, scale, bpm, instruments,
+            [(s["name"], s["bars"]) for s in sections],
+        )
+
+        # Verify Reaper is alive — best-effort check
+        # (is_connected relies on OSC feedback which may not be running in MCP stdio mode)
+        # We use probe() to send a UDP message and update _last_feedback_time,
+        # then try refresh_state() as a second opinion.
+        # If neither works, we proceed anyway — UDP commands are fire-and-forget
+        # and will silently succeed once Reaper starts.
+        reaper_alive = False
+        try:
+            self.probe(timeout=0.5)
+            reaper_alive = True
+        except Exception:
+            pass
+
+        if not reaper_alive and hasattr(self, "refresh_state"):
+            try:
+                test_state = self.refresh_state(wait=0.3)
+                if test_state and test_state.track_count >= 0:
+                    reaper_alive = True
+            except Exception:
+                pass
+
+        if not reaper_alive:
+            logger.warning(
+                "generate_project: Reaper connectivity unclear — proceeding anyway. "
+                "Commands will take effect once Reaper is running."
+            )
+
+        results: list[str] = []
+
+        # Step 1: Set tempo
+        self.set_tempo(bpm)
+        results.append(f"Tempo: {bpm} BPM")
+        time.sleep(0.3)
+
+        # Step 2: Create song structure markers
+        section_counts: dict[str, int] = {}
+        expanded = []
+        for sec in sections:
+            base_name = str(sec["name"]).split()[0]
+            section_counts.setdefault(base_name, 0)
+            section_counts[base_name] += 1
+            instance_name = f"{base_name} {section_counts[base_name]}"
+            expanded.append({"name": instance_name, "bars": sec["bars"]})
+
+        struct_result = self.create_song_structure(expanded, bpm=bpm)
+        if struct_result.success:
+            results.append(f"Structure: {', '.join(s['name'] for s in expanded)}")
+            logger.info("generate_project: markers created: %s",
+                        [s["name"] for s in expanded])
+        else:
+            logger.warning("generate_project: markers failed: %s",
+                           struct_result.error)
+        time.sleep(0.5)
+
+        # Step 3: Create instrument tracks with MIDI
+        current_tracks = 0
+        if hasattr(self, "state") and self.state:
+            current_tracks = getattr(self.state, "track_count", 0) or 0
+
+        scale_notes = self._scale_notes(key, scale)
+        total_bars = sum(int(s["bars"]) for s in sections)
+        logger.info("generate_project: scale_notes=%s total_bars=%d",
+                     scale_notes, total_bars)
+
+        for i, instrument in enumerate(instruments):
+            role = instrument.lower().strip()
+            logger.info("generate_project: creating %s track (%d/%d)",
+                        role, i + 1, len(instruments))
+
+            # Insert a new track
+            self.send_command("/action/40001")
+            time.sleep(0.5)
+
+            new_track = current_tracks + i + 1
+
+            # Rename the track
+            self.rename_track(new_track, role.capitalize())
+            time.sleep(0.2)
+
+            # Generate key-aware MIDI
+            midi = MIDIFile(1)
+            mtrack = 0
+            midi.addTempo(mtrack, 0, bpm)
+
+            self._generate_instrument_pattern(
+                midi, mtrack, role, scale_notes, total_bars, bpm,
+            )
+
+            # Write MIDI file
+            buf = io.BytesIO()
+            midi.writeFile(buf)
+            midi_path = os.path.join(
+                tempfile.gettempdir(), f"audioshuttle_{role}.mid"
+            )
+            with open(midi_path, "wb") as f:
+                f.write(buf.getvalue())
+            logger.info("generate_project: wrote %s (%d bytes)",
+                         midi_path, len(buf.getvalue()))
+
+            # Import via watcher
+            trigger_path = "/tmp/audioshuttle_import_trigger"
+            try:
+                os.remove(trigger_path)
+            except OSError:
+                pass
+
+            trigger_content = f"import:track:{new_track}"
+            with open(trigger_path, "w") as f:
+                f.write(trigger_content)
+
+            # Chown to Reaper user
+            reaper_uid = None
+            for pid_dir in _glob.glob("/proc/[0-9]*"):
+                try:
+                    with open(f"{pid_dir}/cmdline", "rb") as pf:
+                        if b"REAPER/reaper" in pf.read():
+                            stat = os.stat(f"{pid_dir}")
+                            os.chown(trigger_path, stat.st_uid, stat.st_gid)
+                            reaper_uid = stat.st_uid
+                            break
+                except (OSError, PermissionError):
+                    continue
+
+            # Wait for import (up to 3s)
+            imported = False
+            for _ in range(15):
+                time.sleep(0.2)
+                if not os.path.exists(trigger_path):
+                    imported = True
+                    break
+
+            if not imported:
+                logger.warning("generate_project: MIDI import timeout for %s",
+                               role)
+
+            results.append(f"{role.capitalize()} (T{new_track})")
+            time.sleep(0.3)
+
+        key_desc = f"{key} {scale}"
+        self._log_command(
+            "generate_project",
+            f"Generated: {key_desc}, {bpm} BPM, "
+            f"{len(instruments)} instruments, {len(expanded)} sections",
+        )
+        return CommandResult(
+            success=True,
+            address="/project",
+            reaper_feedback=(
+                f"Project: {key_desc}, {bpm} BPM\n"
+                f"Sections: {', '.join(s['name'] for s in expanded)}\n"
+                f"Tracks: {', '.join(results[2:])}"
+            ),
+        )
+
+    def _generate_instrument_pattern(
+        self,
+        midi: "MIDIFile",
+        mtrack: int,
+        role: str,
+        scale_notes: list[int],
+        total_bars: int,
+        tempo: int,
+    ) -> None:
+        """Generate a key-aware MIDI pattern for an instrument role."""
+        # Clamp to 4 bars minimum, 32 bars max for generation
+        gen_bars = max(4, min(total_bars, 32))
+
+        if role in ("drums", "drum", "beat", "kick", "rhythm"):
+            ch = 9  # Channel 10
+            for bar in range(gen_bars):
+                off = bar * 4
+                for b in range(8):
+                    midi.addNote(mtrack, ch, 42, off + b * 0.5, 0.5, 100)
+                midi.addNote(mtrack, ch, 36, off, 1, 120)
+                midi.addNote(mtrack, ch, 36, off + 2, 1, 120)
+                midi.addNote(mtrack, ch, 38, off + 1, 1, 120)
+                midi.addNote(mtrack, ch, 38, off + 3, 1, 120)
+
+        elif role in ("bass",):
+            ch = 0
+            root = scale_notes[0] - 12  # One octave down
+            fifth = scale_notes[4] - 12 if len(scale_notes) > 4 else root + 7
+            for bar in range(gen_bars):
+                off = bar * 4
+                # Root on beats 1-2, fifth on beats 3-4
+                midi.addNote(mtrack, ch, root, off, 1.8, 100)
+                midi.addNote(mtrack, ch, root, off + 1, 1.8, 100)
+                midi.addNote(mtrack, ch, fifth, off + 2, 1.8, 100)
+                midi.addNote(mtrack, ch, fifth, off + 3, 1.8, 100)
+
+        elif role in ("melody", "lead", "line"):
+            ch = 0
+            for bar in range(gen_bars):
+                off = bar * 4
+                for beat in range(4):
+                    idx = (bar * 4 + beat) % len(scale_notes)
+                    note = scale_notes[idx]
+                    midi.addNote(mtrack, ch, note, off + beat, 0.9, 90)
+
+        elif role in ("chords", "keys", "pad", "key"):
+            ch = 0
+            # Cycle through I, IV, V chords
+            chord_degrees = [0, 3, 4]  # I, IV, V
+            for bar in range(gen_bars):
+                off = bar * 4
+                deg = chord_degrees[bar % len(chord_degrees)]
+                triad = self._chord_notes(
+                    # Extract key from scale_notes root
+                    ["C", "C#", "D", "D#", "E", "F",
+                     "F#", "G", "G#", "A", "A#", "B"][
+                        (scale_notes[0] - 60) % 12
+                    ],
+                    "major", degree=deg,
+                )
+                for note in triad:
+                    midi.addNote(mtrack, ch, note, off, 3.8, 75)
+
+        elif role in ("strings", "string", "pad"):
+            ch = 0
+            root = scale_notes[0]
+            third = scale_notes[2]
+            fifth = scale_notes[4] if len(scale_notes) > 4 else root + 7
+            for bar in range(gen_bars):
+                off = bar * 4
+                for note in [root, third, fifth]:
+                    midi.addNote(mtrack, ch, note, off, 3.8, 65)
+
+        else:
+            # Generic: scale-based pattern
+            ch = 0
+            for bar in range(gen_bars):
+                off = bar * 4
+                for beat in range(4):
+                    idx = (bar * 4 + beat) % len(scale_notes)
+                    midi.addNote(mtrack, ch, scale_notes[idx], off + beat, 0.9, 85)
 
     def set_track_color(self, track: int, color: str) -> CommandResult:
         """Set a track's color in Reaper.

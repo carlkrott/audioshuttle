@@ -80,6 +80,18 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         ),
         "insert_midi_pattern": lambda: bridge.insert_midi_pattern(
             str(args.get("role", "drums")),
+            track=int(args["track"]) if "track" in args else None,
+        ),
+        "create_song_structure": lambda: bridge.create_song_structure(
+            list(args["sections"]),
+            bpm=int(args["bpm"]) if "bpm" in args else None,
+        ),
+        "generate_project": lambda: bridge.generate_project(
+            sections=list(args["sections"]),
+            instruments=list(args["instruments"]),
+            key=str(args.get("key", "C")),
+            scale=str(args.get("scale", "major")),
+            bpm=int(args.get("bpm", 120)),
         ),
         "set_track_color": lambda: bridge.set_track_color(
             int(args["track"]), str(args["color"]),
@@ -377,14 +389,17 @@ class VoicePipeline:
             "temple→tempo, mark her→marker, pre set→preset, monument→monitor, "
             "ought a mission→automation, reeve erb→reverb, on do→undo, "
             "rain ame→rename, loupe→loop, truck→track, "
-            "won't→1 (when after 'track'), oh I'm→arm, going to→(remove).\n"
+            "won't→1 (when after 'track'), oh I'm→arm, going to→(remove), "
+            "ability to track→a melody track, add a melody→add a melody, "
+            "medley→melody, melo→melody, riddum→rhythm, middy→midi, "
+            "mid if→midi, base→bass, bas→bass, cords→chords.\n"
             "Use track names from context if the transcription says 'guitar' or 'drums'.\n"
             f"{state_context}\n\n"
             f"Raw: '{raw_text}'"
         )
         result = self._model_server.chat(
             [{"role": "user", "content": prompt}],
-            max_tokens=512,        )
+            max_tokens=1024,        )
         if not result:
             return raw_text
 
@@ -574,17 +589,23 @@ class VoicePipeline:
             sequenced.append(entry)
 
         # Dependency check: insert_midi_pattern needs a track
-        # If no insert_track precedes it, auto-prepend one
+        # If no insert_track precedes it AND no target track specified, auto-prepend one
         has_insert_before_midi = False
         for i, cmd in enumerate(sequenced):
             if cmd["tool"] == "insert_track":
                 has_insert_before_midi = True
             elif cmd["tool"] == "insert_midi_pattern" and not has_insert_before_midi:
-                # No track was inserted — add one before the MIDI pattern
-                track_insert = {"tool": "insert_track", "args": {}, "_delay_ms": 0}
-                sequenced.insert(i, track_insert)
-                # Ensure the MIDI pattern still has its delay
-                sequenced[i + 1]["_delay_ms"] = max(sequenced[i + 1].get("_delay_ms", 0), 800)
+                # Check if a target track was specified (existing track)
+                if "track" in cmd.get("args", {}):
+                    # Target track exists — no need to insert a new one
+                    # Just ensure the MIDI delay is sufficient for track selection
+                    cmd["_delay_ms"] = max(cmd.get("_delay_ms", 0), 800)
+                else:
+                    # No target track — add one before the MIDI pattern
+                    track_insert = {"tool": "insert_track", "args": {}, "_delay_ms": 0}
+                    sequenced.insert(i, track_insert)
+                    # Ensure the MIDI pattern still has its delay
+                    sequenced[i + 1]["_delay_ms"] = max(sequenced[i + 1].get("_delay_ms", 0), 800)
                 break  # Only fix the first MIDI without track
 
         return sequenced
