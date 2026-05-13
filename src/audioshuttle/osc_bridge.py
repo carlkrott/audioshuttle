@@ -673,6 +673,10 @@ class ReaperOSC:
         if target_track is not None:
             trigger_content = f"import:track:{target_track}:{role}"
         try:
+            try:
+                os.remove(trigger_path)
+            except OSError:
+                pass
             with open(trigger_path, "w") as f:
                 f.write(trigger_content)
             self._chown_to_reaper(trigger_path)
@@ -773,6 +777,32 @@ class ReaperOSC:
                 return True
         return False
 
+    def _insert_tracks_via_lua(self, count: int = 1, wait: float = 2.0) -> bool:
+        """Insert tracks via Lua watcher (OSC /action doesn't create tracks).
+
+        Args:
+            count: Number of tracks to insert.
+            wait: Max seconds to wait for trigger consumption.
+
+        Returns:
+            True if trigger was consumed, False otherwise.
+        """
+        trigger_path = "/tmp/audioshuttle_track_insert_trigger"
+        try:
+            os.remove(trigger_path)
+        except OSError:
+            pass
+
+        with open(trigger_path, "w") as f:
+            f.write(str(count))
+        self._chown_to_reaper(trigger_path)
+
+        for _ in range(int(wait / 0.1)):
+            time.sleep(0.1)
+            if not os.path.exists(trigger_path):
+                return True
+        return False
+
     def create_song_structure(
         self,
         sections: list[dict[str, str | int]],
@@ -805,6 +835,10 @@ class ReaperOSC:
         # Write trigger file for Lua watcher
         trigger_path = "/tmp/audioshuttle_markers_trigger"
         try:
+            try:
+                os.remove(trigger_path)
+            except OSError:
+                pass
             with open(trigger_path, "w") as f:
                 f.write("\n".join(lines))
             self._chown_to_reaper(trigger_path)
@@ -910,6 +944,17 @@ class ReaperOSC:
 
         results: list[str] = []
 
+        def _watcher_alive() -> bool:
+            """Check if Lua watcher defer loop is still running."""
+            try:
+                alive_path = "/tmp/audioshuttle_watcher_alive"
+                if not os.path.exists(alive_path):
+                    return False
+                mtime = os.path.getmtime(alive_path)
+                return (time.time() - mtime) < 5.0
+            except OSError:
+                return False
+
         # Step 1: Set tempo
         self.set_tempo(bpm)
         results.append(f"Tempo: {bpm} BPM")
@@ -935,7 +980,16 @@ class ReaperOSC:
                            struct_result.error)
         time.sleep(0.5)
 
-        # Step 3: Create instrument tracks with MIDI
+        # Step 3: Create ALL instrument tracks FIRST (before adding any content)
+        # OSC /action doesn't work for track creation — use Lua watcher instead
+        num_instruments = len(instruments)
+        inserted = self._insert_tracks_via_lua(count=num_instruments, wait=2.0)
+        if not inserted:
+            logger.warning("generate_project: track insert trigger not consumed")
+        time.sleep(0.5)  # Let Reaper settle after inserts
+        time.sleep(0.5)  # Let Reaper settle after all inserts
+
+        # Get actual track count (tracks 1..N are the instruments)
         current_tracks = 0
         if hasattr(self, "state") and self.state:
             current_tracks = getattr(self.state, "track_count", 0) or 0
@@ -950,10 +1004,17 @@ class ReaperOSC:
             logger.info("generate_project: creating %s track (%d/%d)",
                         role, i + 1, len(instruments))
 
-            # Insert a new track
-            self.send_command("/action/40001")
-            time.sleep(0.5)
+            # Check watcher health before each instrument
+            if not _watcher_alive():
+                logger.warning(
+                    "generate_project: Lua watcher died before track %d (%s) — "
+                    "skipping remaining instruments",
+                    i + 1, role,
+                )
+                results.append(f"{role.capitalize()} (SKIPPED — watcher dead)")
+                continue
 
+            # Track was already created in Step 3
             new_track = current_tracks + i + 1
 
             # Rename the track
@@ -981,8 +1042,8 @@ class ReaperOSC:
                          midi_path, len(buf.getvalue()))
 
             # Clear existing items on this track before importing new MIDI
-            self._clear_track_items(new_track, wait=0.5)
-            time.sleep(0.2)
+            self._clear_track_items(new_track, wait=1.0)
+            time.sleep(0.5)
 
             # Import via watcher
             trigger_path = "/tmp/audioshuttle_import_trigger"
@@ -998,9 +1059,9 @@ class ReaperOSC:
             # Chown to Reaper user
             self._chown_to_reaper(trigger_path)
 
-            # Wait for import (up to 3s)
+            # Wait for import (up to 5s — Lua processes one trigger per tick)
             imported = False
-            for _ in range(15):
+            for _ in range(25):
                 time.sleep(0.2)
                 if not os.path.exists(trigger_path):
                     imported = True
@@ -1013,8 +1074,8 @@ class ReaperOSC:
             # Auto-load instrument plugin on the track
             plugin_name = self._INSTRUMENT_PLUGINS.get(role)
             if plugin_name:
-                time.sleep(0.2)
-                fx_result = self._fx_trigger("add", new_track, plugin_name, wait=0.8)
+                time.sleep(0.5)
+                fx_result = self._fx_trigger("add", new_track, plugin_name, wait=2.0)
                 if fx_result.get("success"):
                     results.append(
                         f"{role.capitalize()} (T{new_track}) + {plugin_name}"
@@ -1935,6 +1996,10 @@ class ReaperOSC:
             pass
 
         # Write trigger
+        try:
+            os.remove(trigger_path)
+        except OSError:
+            pass
         with open(trigger_path, "w") as f:
             f.write("list")
 
@@ -2007,12 +2072,24 @@ class ReaperOSC:
         self, trigger_path: str, result_path: str,
         content: str, wait: float = 1.0,
     ) -> dict | None:
-        """Generic Lua watcher trigger: write content, wait for JSON result."""
+        """Generic Lua watcher trigger: write content, wait for JSON result.
+
+        Uses remove-then-create to avoid PermissionError on tmpfs when
+        the trigger file is owned by a different user (Reaper/korphaus)
+        and Python runs as root.
+        """
         import json as _json
         import time
 
         try:
             os.remove(result_path)
+        except OSError:
+            pass
+
+        # Remove-then-create avoids tmpfs PermissionError when
+        # file was previously chowned to Reaper's user
+        try:
+            os.remove(trigger_path)
         except OSError:
             pass
 
@@ -2294,6 +2371,10 @@ class ReaperOSC:
 
         # Write trigger file for the watcher
         try:
+            try:
+                os.remove(trigger_path)
+            except OSError:
+                pass
             with open(trigger_path, "w") as f:
                 f.write("dump")
             self._chown_to_reaper(trigger_path)
