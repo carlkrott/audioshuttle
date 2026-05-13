@@ -78,7 +78,6 @@ class TestStateFormatting:
         state = DAWState()
         text = IntentTranslator._format_daw_state(state)
         assert "Transport: stopped" in text
-        assert "Master:" in text
 
     def test_format_state_with_tracks(self):
         state = make_test_state()
@@ -86,6 +85,8 @@ class TestStateFormatting:
         assert "Drums" in text
         assert "Bass" in text
         assert "Vocals" in text
+        # Compact format: track names on one line
+        assert "Tracks (5):" in text
 
     def test_format_state_with_playing(self):
         state = DAWState(transport=TransportState(playing=True))

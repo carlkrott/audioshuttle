@@ -594,27 +594,21 @@ class IntentTranslator:
 
     @staticmethod
     def _format_daw_state(state: DAWState) -> str:
-        """Format DAW state into a human-readable description for the prompt."""
+        """Format DAW state into a compact description for the prompt."""
         lines = []
         if state.tracks:
-            lines.append("Tracks:")
-            for t in state.tracks:
-                name = t.name or f"Track {t.track_number}"
-                lines.append(
-                    f"  {t.track_number}. {name} "
-                    f"(vol={t.volume:.2f}, pan={t.pan:.2f}, "
-                    f"mute={t.mute}, solo={t.solo})"
-                )
+            # Compact: just track number and name (model doesn't need vol/pan details)
+            names = [f"{t.track_number}.{t.name or 'unnamed'}" for t in state.tracks]
+            lines.append(f"Tracks ({len(state.tracks)}): " + ", ".join(names))
         elif state.track_count > 0:
-            lines.append(f"Track count: {state.track_count} (names not available, use track numbers)")
+            lines.append(f"Track count: {state.track_count} (names not available)")
         lines.append(
             f"Transport: {'playing' if state.transport.playing else 'stopped'}"
             f"{' (recording)' if state.transport.recording else ''}"
             f" at {state.transport.position_seconds:.1f}s"
         )
-        lines.append(
-            f"Master: vol={state.master_volume:.2f}, pan={state.master_pan:.2f}"
-        )
+        if state.transport.tempo > 0:
+            lines.append(f"Tempo: {state.transport.tempo:.0f} BPM")
         return "\n".join(lines)
 
     @staticmethod
