@@ -64,12 +64,12 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         raise ValueError(f"Unsupported DAW: {settings.daw_type}")
 
     # ── Domain Expert Model ─────────────────────────────────────
-    # Uses the E2B model for command translation.
-    # If the external model server at model_api_url is running, use it.
-    # Otherwise falls back to rule-based parsing.
+    # Uses the E2B model for command translation + arrangement assessment.
     model_server: ModelServer | None = None
     if settings.model_enabled:
         model_server = ModelServer(settings)
+        # Wire model server to bridge for assess_arrangement
+        bridge._model_server = model_server
         # Don't start embedded server — use external if available
         try:
             import httpx

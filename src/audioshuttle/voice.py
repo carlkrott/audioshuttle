@@ -93,6 +93,13 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
             scale=str(args.get("scale", "major")),
             bpm=int(args.get("bpm", 120)),
         ),
+        "assess_arrangement": lambda: bridge.assess_arrangement(
+            key=str(args.get("key", "C")),
+            scale=str(args.get("scale", "major")),
+            bpm=int(args.get("bpm", 120)),
+            sections=list(args.get("sections", [])),
+            instruments=list(args.get("instruments", [])),
+        ),
         "set_track_color": lambda: bridge.set_track_color(
             int(args["track"]), str(args["color"]),
         ),

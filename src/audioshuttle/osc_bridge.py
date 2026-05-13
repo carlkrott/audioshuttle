@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import re
 import time
 import io
@@ -746,6 +747,32 @@ class ReaperOSC:
 
     # ── Song structure & project generation ───────────────────────────
 
+    def _clear_track_items(self, track: int, wait: float = 1.0) -> bool:
+        """Clear all items from a track via the Lua watcher.
+
+        Args:
+            track: Track number (1-based).
+            wait: Max seconds to wait for completion.
+
+        Returns:
+            True if trigger was consumed (cleared), False otherwise.
+        """
+        trigger_path = "/tmp/audioshuttle_clear_trigger"
+        try:
+            os.remove(trigger_path)
+        except OSError:
+            pass
+
+        with open(trigger_path, "w") as f:
+            f.write(f"track:{track}")
+        self._chown_to_reaper(trigger_path)
+
+        for _ in range(int(wait / 0.1)):
+            time.sleep(0.1)
+            if not os.path.exists(trigger_path):
+                return True
+        return False
+
     def create_song_structure(
         self,
         sections: list[dict[str, str | int]],
@@ -933,13 +960,13 @@ class ReaperOSC:
             self.rename_track(new_track, role.capitalize())
             time.sleep(0.2)
 
-            # Generate key-aware MIDI
+            # Generate section-aware arrangement MIDI
             midi = MIDIFile(1)
             mtrack = 0
             midi.addTempo(mtrack, 0, bpm)
 
-            self._generate_instrument_pattern(
-                midi, mtrack, role, scale_notes, total_bars, bpm,
+            self._generate_arrangement(
+                midi, mtrack, role, scale_notes, expanded, bpm,
             )
 
             # Write MIDI file
@@ -952,6 +979,10 @@ class ReaperOSC:
                 f.write(buf.getvalue())
             logger.info("generate_project: wrote %s (%d bytes)",
                          midi_path, len(buf.getvalue()))
+
+            # Clear existing items on this track before importing new MIDI
+            self._clear_track_items(new_track, wait=0.5)
+            time.sleep(0.2)
 
             # Import via watcher
             trigger_path = "/tmp/audioshuttle_import_trigger"
@@ -1018,87 +1049,375 @@ class ReaperOSC:
             ),
         )
 
-    def _generate_instrument_pattern(
+    def assess_arrangement(
+        self,
+        key: str,
+        scale: str,
+        bpm: int,
+        sections: list[dict[str, str | int]],
+        instruments: list[str],
+    ) -> CommandResult:
+        """Ask the E2B model to evaluate the musical arrangement.
+
+        Uses the model server (Gemma E2B) to assess arrangement quality,
+        suggest improvements, and describe the energy flow.
+
+        Args:
+            key: Musical key (C, D, E, etc.).
+            scale: Scale type (major, minor, etc.).
+            bpm: Tempo.
+            sections: Song sections.
+            instruments: Instrument list.
+        """
+        import json as _json
+
+        assessment = None
+
+        # Try to call model server for assessment
+        if hasattr(self, "_model_server") and self._model_server:
+            try:
+                section_desc = ", ".join(
+                    f"{s['name']} ({s['bars']} bars)" for s in sections
+                )
+                prompt = (
+                    f"Rate this song arrangement from 1-10 for musical quality.\n"
+                    f"Key: {key} {scale}, BPM: {bpm}\n"
+                    f"Sections: {section_desc}\n"
+                    f"Instruments: {', '.join(instruments)}\n\n"
+                    f"Respond with ONLY a JSON object: "
+                    f'{{"rating": N, "suggestions": ["suggestion1"], '
+                    f'"energy_flow": "description of energy across sections"}}'
+                )
+                result = self._model_server.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                )
+                if result:
+                    # Parse response — extract JSON from model output
+                    content = ""
+                    if isinstance(result, dict):
+                        # Handle reasoning_content from thinking models
+                        content = result.get("content", "")
+                        if not content:
+                            content = result.get("reasoning_content", "")
+                    elif isinstance(result, str):
+                        content = result
+                    if content:
+                        # Try to extract JSON from the response
+                        try:
+                            # Find JSON object in the text
+                            start = content.find("{")
+                            end = content.rfind("}") + 1
+                            if start >= 0 and end > start:
+                                assessment = _json.loads(content[start:end])
+                        except (_json.JSONDecodeError, ValueError):
+                            assessment = {"raw_response": content[:200]}
+            except Exception as e:
+                logger.warning("assess_arrangement: model call failed: %s", e)
+
+        feedback = f"Arrangement: {key} {scale}, {bpm} BPM, {len(sections)} sections, {len(instruments)} instruments"
+        if assessment:
+            rating = assessment.get("rating", "?")
+            suggestions = assessment.get("suggestions", [])
+            energy = assessment.get("energy_flow", "")
+            feedback += f"\nE2B Rating: {rating}/10"
+            if energy:
+                feedback += f"\nEnergy: {energy}"
+            if suggestions:
+                feedback += f"\nSuggestions: {'; '.join(suggestions[:3])}"
+        else:
+            feedback += "\n(E2B model unavailable for assessment)"
+
+        self._log_command("assess_arrangement", feedback)
+        return CommandResult(
+            success=True,
+            address="/assess",
+            reaper_feedback=feedback,
+        )
+
+    def _generate_arrangement(
         self,
         midi: "MIDIFile",
         mtrack: int,
         role: str,
         scale_notes: list[int],
-        total_bars: int,
-        tempo: int,
+        sections: list[dict[str, str | int]],
+        bpm: int,
     ) -> None:
-        """Generate a key-aware MIDI pattern for an instrument role."""
-        # Clamp to 4 bars minimum, 32 bars max for generation
-        gen_bars = max(4, min(total_bars, 32))
+        """Generate section-aware MIDI arrangement for one instrument.
 
-        if role in ("drums", "drum", "beat", "kick", "rhythm"):
-            ch = 9  # Channel 10
-            for bar in range(gen_bars):
-                off = bar * 4
-                for b in range(8):
-                    midi.addNote(mtrack, ch, 42, off + b * 0.5, 0.5, 100)
-                midi.addNote(mtrack, ch, 36, off, 1, 120)
-                midi.addNote(mtrack, ch, 36, off + 2, 1, 120)
-                midi.addNote(mtrack, ch, 38, off + 1, 1, 120)
-                midi.addNote(mtrack, ch, 38, off + 3, 1, 120)
+        Iterates over song sections, looks up density/velocity profiles,
+        and generates section-appropriate patterns placed at correct beat offsets.
 
-        elif role in ("bass",):
+        Args:
+            midi: MIDIFile object to write into.
+            mtrack: Track index within the MIDI file.
+            role: Instrument role (drums, bass, melody, etc.).
+            scale_notes: MIDI note numbers for the current key/scale.
+            sections: Song sections with {"name": str, "bars": int, "start_bar": int}.
+            bpm: Tempo.
+        """
+        bar_offset = 0
+        for section in sections:
+            name = str(section.get("name", "Verse"))
+            bars = int(section.get("bars", 8))
+            section_type = self._normalize_section_name(name)
+            profile = self._SECTION_PROFILES.get(section_type, self._SECTION_PROFILES["verse"])
+
+            # Seed for reproducible but section-unique variation
+            random.seed(hash(f"{role}:{name}:{bars}"))
+
+            # Check if this role is active in this section
+            norm_role = self._normalize_role(role)
+            if norm_role not in profile["active_roles"] and role.lower() not in profile["active_roles"]:
+                bar_offset += bars
+                continue  # Instrument rests in this section
+
+            density = profile["density"]
+            vel_lo, vel_hi = profile["vel_range"]
+
+            self._generate_section_pattern(
+                midi, mtrack, role, scale_notes,
+                start_bar=bar_offset, bars=bars,
+                density=density, vel_range=(vel_lo, vel_hi),
+                section_type=section_type, bpm=bpm,
+            )
+            bar_offset += bars
+
+    def _generate_section_pattern(
+        self,
+        midi: "MIDIFile",
+        mtrack: int,
+        role: str,
+        scale_notes: list[int],
+        start_bar: int,
+        bars: int,
+        density: float,
+        vel_range: tuple[int, int],
+        section_type: str,
+        bpm: int,
+    ) -> None:
+        """Generate MIDI for one instrument in one section.
+
+        Args:
+            midi: MIDIFile to write into.
+            mtrack: MIDI track index.
+            role: Instrument role.
+            scale_notes: Scale degrees as MIDI note numbers.
+            start_bar: Bar offset where this section begins.
+            bars: Number of bars in this section.
+            density: 0.0-1.0 note density/activity.
+            vel_range: (min_vel, max_vel) for dynamics.
+            section_type: Normalized section name (verse, chorus, etc.).
+            bpm: Tempo.
+        """
+        norm_role = self._normalize_role(role)
+        vel_mid = (vel_range[0] + vel_range[1]) // 2
+
+        # ── Drums ──────────────────────────────────────────────────
+        if norm_role in ("drums", "drum", "beat", "kick", "snare", "rhythm"):
+            ch = 9  # Channel 10 (drums)
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+
+                # Kick on 1, (3 in chorus/high density)
+                midi.addNote(mtrack, ch, 36, off, 1, vel_mid)
+                if density >= 0.8:
+                    midi.addNote(mtrack, ch, 36, off + 2, 1, int(vel_mid * 0.95))
+
+                # Snare on 2 and 4
+                if density >= 0.3:
+                    midi.addNote(mtrack, ch, 38, off + 1, 1, vel_mid)
+                if density >= 0.4:
+                    midi.addNote(mtrack, ch, 38, off + 3, 1, int(vel_mid * 0.9))
+
+                # Hi-hat subdivision scales with density
+                if density >= 0.8:  # 16th notes
+                    for b in range(16):
+                        vel = int(vel_mid * (0.5 if b % 2 == 0 else 0.35))
+                        midi.addNote(mtrack, ch, 42, off + b * 0.25, 0.25, vel)
+                elif density >= 0.5:  # 8th notes
+                    for b in range(8):
+                        vel = int(vel_mid * 0.5)
+                        midi.addNote(mtrack, ch, 42, off + b * 0.5, 0.5, vel)
+                else:  # Quarter notes
+                    for b in range(4):
+                        vel = int(vel_mid * 0.4)
+                        midi.addNote(mtrack, ch, 42, off + b, 1, vel)
+
+                # Ghost snare in chorus
+                if section_type == "chorus" and density >= 0.9:
+                    midi.addNote(mtrack, ch, 38, off + 2.75, 0.25, int(vel_mid * 0.35))
+
+        # ── Bass ───────────────────────────────────────────────────
+        elif norm_role == "bass":
             ch = 0
             root = scale_notes[0] - 12  # One octave down
             fifth = scale_notes[4] - 12 if len(scale_notes) > 4 else root + 7
-            for bar in range(gen_bars):
-                off = bar * 4
-                # Root on beats 1-2, fifth on beats 3-4
-                midi.addNote(mtrack, ch, root, off, 1.8, 100)
-                midi.addNote(mtrack, ch, root, off + 1, 1.8, 100)
-                midi.addNote(mtrack, ch, fifth, off + 2, 1.8, 100)
-                midi.addNote(mtrack, ch, fifth, off + 3, 1.8, 100)
+            octave_up = root + 12
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                if density >= 0.7:
+                    # Walking bass: root, approach, fifth, approach
+                    midi.addNote(mtrack, ch, root, off, 0.9, vel_mid)
+                    approach = root + (scale_notes[1] - scale_notes[0]) if len(scale_notes) > 1 else root + 2
+                    midi.addNote(mtrack, ch, approach - 12, off + 1, 0.9, int(vel_mid * 0.85))
+                    midi.addNote(mtrack, ch, fifth, off + 2, 0.9, vel_mid)
+                    back = root + (scale_notes[-2] - scale_notes[-1]) if len(scale_notes) > 2 else root - 1
+                    midi.addNote(mtrack, ch, back - 12, off + 3, 0.9, int(vel_mid * 0.8))
+                elif density >= 0.4:
+                    # Root-fifth: beats 1-2 root, 3-4 fifth
+                    midi.addNote(mtrack, ch, root, off, 1.8, vel_mid)
+                    midi.addNote(mtrack, ch, root, off + 1, 1.8, int(vel_mid * 0.9))
+                    midi.addNote(mtrack, ch, fifth, off + 2, 1.8, vel_mid)
+                    midi.addNote(mtrack, ch, fifth, off + 3, 1.8, int(vel_mid * 0.9))
+                else:
+                    # Sparse: whole note root only
+                    midi.addNote(mtrack, ch, root, off, 3.8, int(vel_mid * 0.8))
 
-        elif role in ("melody", "lead", "line"):
+        # ── Melody / Lead ──────────────────────────────────────────
+        elif norm_role in ("melody", "lead", "line"):
             ch = 0
-            for bar in range(gen_bars):
-                off = bar * 4
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
                 for beat in range(4):
-                    idx = (bar * 4 + beat) % len(scale_notes)
+                    # Rest probability inversely proportional to density
+                    if random.random() > density * 0.8 + 0.2:
+                        continue
+                    # Stepwise motion with occasional leaps at high density
+                    if density >= 0.7 and random.random() < 0.3:
+                        idx = (bar * 4 + beat + random.randint(1, 3)) % len(scale_notes)
+                    else:
+                        idx = (bar * 4 + beat) % len(scale_notes)
                     note = scale_notes[idx]
-                    midi.addNote(mtrack, ch, note, off + beat, 0.9, 90)
+                    # Wider octave range in chorus
+                    if section_type == "chorus" and random.random() < 0.2:
+                        note += 12
+                    dur = 0.9 if density >= 0.5 else 1.8
+                    midi.addNote(mtrack, ch, note, off + beat, dur, vel_mid)
 
-        elif role in ("chords", "keys", "pad", "key"):
+        # ── Keys / Chords ──────────────────────────────────────────
+        elif norm_role in ("chords", "keys", "key"):
             ch = 0
-            # Cycle through I, IV, V chords
-            chord_degrees = [0, 3, 4]  # I, IV, V
-            for bar in range(gen_bars):
-                off = bar * 4
+            # Scale-appropriate chord degrees
+            if len(scale_notes) >= 5:
+                chord_degrees = [0, 3, 4]  # I, IV, V
+                if density >= 0.7:
+                    chord_degrees = [0, 1, 3, 4, 5]  # I, ii, IV, V, vi
+            else:
+                chord_degrees = [0, 2, 3]
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
                 deg = chord_degrees[bar % len(chord_degrees)]
                 triad = self._chord_notes(
-                    # Extract key from scale_notes root
                     ["C", "C#", "D", "D#", "E", "F",
                      "F#", "G", "G#", "A", "A#", "B"][
                         (scale_notes[0] - 60) % 12
                     ],
                     "major", degree=deg,
                 )
-                for note in triad:
-                    midi.addNote(mtrack, ch, note, off, 3.8, 75)
+                if density >= 0.8:
+                    # Arpeggiated: play chord tones individually
+                    for i, note in enumerate(triad):
+                        midi.addNote(mtrack, ch, note, off + i * 0.5, 0.45, int(vel_mid * 0.7))
+                        midi.addNote(mtrack, ch, note, off + 2 + i * 0.5, 0.45, int(vel_mid * 0.65))
+                else:
+                    # Block chords: hold for whole bar
+                    for note in triad:
+                        midi.addNote(mtrack, ch, note, off, 3.8, int(vel_mid * 0.75))
 
-        elif role in ("strings", "string", "pad"):
+        # ── Pad ────────────────────────────────────────────────────
+        elif norm_role == "pad":
             ch = 0
             root = scale_notes[0]
-            third = scale_notes[2]
+            third = scale_notes[2] if len(scale_notes) > 2 else root + 4
             fifth = scale_notes[4] if len(scale_notes) > 4 else root + 7
-            for bar in range(gen_bars):
-                off = bar * 4
-                for note in [root, third, fifth]:
-                    midi.addNote(mtrack, ch, note, off, 3.8, 65)
+            chord = [root, third, fifth]
+            # Add seventh at high density
+            if density >= 0.7 and len(scale_notes) > 6:
+                seventh = scale_notes[6]
+                chord.append(seventh)
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                for note in chord:
+                    midi.addNote(mtrack, ch, note, off, 3.9, int(vel_mid * 0.6))
 
-        else:
-            # Generic: scale-based pattern
+        # ── Strings ────────────────────────────────────────────────
+        elif norm_role in ("strings", "string"):
             ch = 0
-            for bar in range(gen_bars):
-                off = bar * 4
+            root = scale_notes[0]
+            third = scale_notes[2] if len(scale_notes) > 2 else root + 4
+            fifth = scale_notes[4] if len(scale_notes) > 4 else root + 7
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                for note in [root, third, fifth]:
+                    midi.addNote(mtrack, ch, note, off, 3.8, int(vel_mid * 0.65))
+                # Counter-melody at high density
+                if density >= 0.7:
+                    for beat in range(0, 4, 2):
+                        idx = (bar * 2 + beat // 2) % len(scale_notes)
+                        midi.addNote(mtrack, ch, scale_notes[idx] + 12,
+                                     off + beat, 1.8, int(vel_mid * 0.5))
+
+        # ── Arp ────────────────────────────────────────────────────
+        elif norm_role == "arp":
+            ch = 0
+            # Speed scales with density: 8ths at 0.5, 16ths at 0.8+
+            subdivision = 0.5 if density < 0.7 else 0.25
+            notes_per_bar = int(4.0 / subdivision)
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                for i in range(notes_per_bar):
+                    idx = (bar * notes_per_bar + i) % len(scale_notes)
+                    note = scale_notes[idx]
+                    # Octave alternation for interest
+                    if i % 2 == 1:
+                        note += 12
+                    midi.addNote(mtrack, ch, note,
+                                 off + i * subdivision,
+                                 subdivision * 0.9,
+                                 int(vel_mid * 0.7))
+
+        # ── FX Riser ───────────────────────────────────────────────
+        elif norm_role in ("fx", "riser"):
+            ch = 0
+            # Ascending pitch sweep over the section
+            start_note = scale_notes[0] - 12
+            end_note = scale_notes[0] + 24
+            total_beats = bars * 4
+            step = max(1, total_beats // 16)
+            for i in range(0, total_beats, step):
+                progress = i / total_beats
+                note = int(start_note + (end_note - start_note) * progress)
+                vel = int(vel_range[0] + (vel_range[1] - vel_range[0]) * progress)
+                midi.addNote(mtrack, ch, note,
+                             (start_bar * 4) + i, step * 0.9, vel)
+
+        # ── Sub Kick ───────────────────────────────────────────────
+        elif norm_role == "sub":
+            ch = 0
+            root = scale_notes[0] - 24  # Two octaves down
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                if density >= 0.6:
+                    # Four on the floor
+                    for beat in range(4):
+                        midi.addNote(mtrack, ch, root, off + beat, 0.9, vel_mid)
+                else:
+                    # Just beat 1
+                    midi.addNote(mtrack, ch, root, off, 0.9, int(vel_mid * 0.8))
+
+        # ── Generic fallback ───────────────────────────────────────
+        else:
+            ch = 0
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
                 for beat in range(4):
+                    if random.random() > density:
+                        continue
                     idx = (bar * 4 + beat) % len(scale_notes)
-                    midi.addNote(mtrack, ch, scale_notes[idx], off + beat, 0.9, 85)
+                    midi.addNote(mtrack, ch, scale_notes[idx],
+                                 off + beat, 0.9, vel_mid)
 
     def set_track_color(self, track: int, color: str) -> CommandResult:
         """Set a track's color in Reaper.
@@ -1349,16 +1668,101 @@ class ReaperOSC:
         "drums": "ReaSynDr",
         "drum": "ReaSynDr",
         "beat": "ReaSynDr",
+        "kick": "ReaSynDr",
+        "snare": "ReaSynDr",
         "rhythm": "ReaSynDr",
         "bass": "ReaSynth",
         "melody": "ReaSynth",
         "lead": "ReaSynth",
+        "line": "ReaSynth",
         "chords": "ReaSynth",
         "keys": "ReaSynth",
+        "key": "ReaSynth",
         "pad": "ReaSynth",
         "synth": "ReaSynth",
         "strings": "ReaSynth",
+        "string": "ReaSynth",
+        "arp": "ReaSynth",
+        "fx": "ReaSynth",
+        "riser": "ReaSynth",
+        "sub": "ReaSynth",
     }
+
+    # All roles that can appear in arrangements
+    _ALL_ROLES = frozenset({
+        "drums", "drum", "beat", "kick", "snare", "rhythm",
+        "bass", "melody", "lead", "line",
+        "chords", "keys", "key", "pad", "synth",
+        "strings", "string", "arp", "fx", "riser", "sub",
+    })
+
+    # Section density profiles — density controls note density & subdivision
+    # vel_range = (min_velocity, max_velocity) for MIDI notes
+    # active_roles = which instrument roles play in this section
+    _SECTION_PROFILES: dict[str, dict] = {
+        "intro": {
+            "density": 0.3,
+            "vel_range": (50, 80),
+            "active_roles": {"drums", "drum", "beat", "kick", "keys", "key", "pad"},
+        },
+        "verse": {
+            "density": 0.6,
+            "vel_range": (60, 100),
+            "active_roles": {
+                "drums", "drum", "beat", "kick", "snare", "rhythm",
+                "bass", "keys", "key", "melody", "lead",
+            },
+        },
+        "chorus": {
+            "density": 1.0,
+            "vel_range": (80, 127),
+            "active_roles": _ALL_ROLES,
+        },
+        "bridge": {
+            "density": 0.5,
+            "vel_range": (50, 90),
+            "active_roles": {"keys", "key", "pad", "strings", "string", "arp"},
+        },
+        "breakdown": {
+            "density": 0.2,
+            "vel_range": (40, 70),
+            "active_roles": {"keys", "key", "pad"},
+        },
+        "buildup": {
+            "density": 0.7,
+            "vel_range": (60, 120),
+            "active_roles": _ALL_ROLES,
+        },
+        "drop": {
+            "density": 1.0,
+            "vel_range": (90, 127),
+            "active_roles": _ALL_ROLES,
+        },
+        "outro": {
+            "density": 0.4,
+            "vel_range": (40, 80),
+            "active_roles": {"drums", "drum", "beat", "kick", "bass", "keys", "key", "pad"},
+        },
+    }
+
+    @staticmethod
+    def _normalize_section_name(name: str) -> str:
+        """Normalize section name for profile lookup.
+        'Verse 1' → 'verse', 'CHORUS' → 'chorus', 'Pre-Chorus' → 'prechorus'
+        """
+        normalized = name.lower().strip()
+        # Remove trailing numbers: 'verse 1' → 'verse'
+        normalized = re.sub(r'\s+\d+$', '', normalized)
+        # Remove spaces and hyphens: 'pre chorus' → 'prechorus'
+        normalized = normalized.replace(" ", "").replace("-", "")
+        return normalized
+
+    @staticmethod
+    def _normalize_role(role: str) -> str:
+        """Normalize instrument role for matching.
+        'Lead Synth' → 'lead', 'FX Riser' → 'fx', 'Snare+Hat' → 'snare'
+        """
+        return role.lower().strip().split()[0].split("+")[0].split("-")[0]
 
     def _fx_trigger(
         self, command: str, track: int, *args: str, wait: float = 1.0,

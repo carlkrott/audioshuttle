@@ -50,6 +50,7 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     # Song structure & project generation
     "create_song_structure": {"sections": list, "bpm": int | None},
     "generate_project": {"sections": list, "instruments": list, "key": str, "scale": str, "bpm": int},
+    "assess_arrangement": {"key": str, "scale": str, "bpm": int, "sections": list, "instruments": list},
     # FX
     "set_fx_param": {"track": int, "fx": int, "param": int, "value": float},
     "fx_bypass": {"track": int, "fx": int, "bypass": bool},
@@ -111,8 +112,10 @@ Transport:
 - insert_track: {}
 - rename_track: {"track": int, "name": str}
 - insert_midi_pattern: {"role": "drums"/"bass"/"chords"/"melody", "track": int|optional}
-- generate_project: {"sections": [{"name": str, "bars": int}], "instruments": ["drums","bass","melody","keys","strings"], "key": str, "scale": "major"/"minor"/"pentatonic"/"blues", "bpm": int}
-  Creates full project: markers + tracks + MIDI. SINGLE command, do NOT split.
+- generate_project: {"sections": [{"name": str, "bars": int}], "instruments": ["drums","bass","melody","keys","strings","lead","pad","arp","fx","sub"], "key": str, "scale": "major"/"minor"/"pentatonic"/"blues", "bpm": int}
+  Creates full project: markers + tracks + section-aware MIDI arrangement. SINGLE command, do NOT split.
+  Section-aware: intro=sparsedrums+keys, verse=drums+bass+keys+melody, chorus=ALL instruments loud, bridge=keys+pad+strings, outro=winding down.
+- assess_arrangement: {"key": str, "scale": str, "bpm": int, "sections": list, "instruments": list} — Ask E2B model to rate the arrangement quality and suggest improvements.
 - create_song_structure: {"sections": [{"name": str, "bars": int}], "bpm": int}
 - set_fx_param: {"track": int, "fx": int, "param": int, "value": float}
 - fx_bypass: {"track": int, "fx": int, "bypass": bool}
