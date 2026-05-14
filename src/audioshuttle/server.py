@@ -64,28 +64,35 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         raise ValueError(f"Unsupported DAW: {settings.daw_type}")
 
     # ── Domain Expert Model ─────────────────────────────────────
-    # Uses the E2B model for command translation + arrangement assessment.
+    # Core component: E4B + mmproj vision model starts with the MCP server.
+    # This is the domain expert that translates natural language to DAW commands.
     model_server: ModelServer | None = None
     if settings.model_enabled:
         model_server = ModelServer(settings)
         # Wire model server to bridge for assess_arrangement
         bridge._model_server = model_server
-        # Don't start embedded server — use external if available
-        try:
-            import httpx
-            resp = httpx.get(
-                settings.model_api_url.replace("/v1/chat/completions", "/health"),
-                timeout=2.0,
-            )
-            if resp.status_code == 200:
-                logger.info("External model server detected — using for translation")
-                model_server.enable_external()
-            else:
-                logger.warning("Model server health check failed — rule-based only")
+        # Start embedded model server as core component
+        logger.info("Starting embedded model server (E4B + vision)...")
+        if model_server.start(wait=True, timeout=120.0):
+            logger.info("Embedded model server ready at %s", model_server.base_url)
+        else:
+            # Fall back to external mode if embedded start fails
+            logger.warning("Embedded model start failed — checking for external server")
+            try:
+                import httpx
+                resp = httpx.get(
+                    settings.model_api_url.replace("/v1/chat/completions", "/health"),
+                    timeout=2.0,
+                )
+                if resp.status_code == 200:
+                    logger.info("External model server detected — using for translation")
+                    model_server.enable_external()
+                else:
+                    logger.warning("No model server available — rule-based only")
+                    model_server = None
+            except Exception:
+                logger.warning("No model server available — rule-based only")
                 model_server = None
-        except Exception:
-            logger.warning("No model server available — rule-based only")
-            model_server = None
 
     translator = IntentTranslator(model_server)
 

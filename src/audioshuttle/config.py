@@ -15,18 +15,19 @@ class Settings(BaseSettings):
     reaper_port: int = 8000  # Reaper listens here for commands
     reaper_feedback_port: int = 9000  # Reaper sends feedback here
 
-    # Embedded model (domain expert)
+    # Embedded model (domain expert — E4B + mmproj vision on dGPU)
     model_api_url: str = "http://localhost:8093/v1/chat/completions"
-    model_name: str = "gemma-4-e2b"
+    model_name: str = "gemma-4-e4b"
     model_enabled: bool = True
-    model_binary: str = "/usr/bin/llama-server"
-    model_path: str = "/home/korphaus/models/llm/gemma-4-e2b-it/gemma-4-E2B-it-UD-Q4_K_XL.gguf"
+    model_binary: str = "/home/korphaus/llama.cpp/build-rocm/bin/llama-server"
+    model_path: str = "/home/korphaus/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+    model_mmproj: str = "/home/korphaus/models/llm/gemma-4-e4b-mmproj-BF16.gguf"
     model_gpu_device: int = 0  # ROCm device index (0 = RX 6950 XT)
-    model_context_size: int = 8192
-    model_threads: int = 4
-    model_threads_batch: int = 4
+    model_context_size: int = 131072  # 128k context
+    model_threads: int = 8
+    model_threads_batch: int = 8
     model_parallel: int = 2
-    model_timeout: int = 60  # seconds for API requests
+    model_timeout: int = 120  # seconds for API requests
     model_gpu_layers: int = 99  # offload all layers to GPU
 
     # External chat interface (example AI)

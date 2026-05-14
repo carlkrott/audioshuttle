@@ -124,11 +124,18 @@ class ModelServer:
             "-c", str(s.model_context_size),
             "-ctk", "q4_0",
             "-ctv", "q4_0",
+            "-fa", "auto",
             "--jinja",
+            "--no-cont-batching",
+            "--reasoning", "off",
             "--timeout", str(s.model_timeout),
             "--mlock",
-            "--no-mmap",
         ]
+
+        # Add mmproj for vision if configured
+        mmproj = getattr(s, "model_mmproj", None)
+        if mmproj:
+            cmd.extend(["--mmproj", mmproj])
 
         logger.info("Starting model server: %s ...", " ".join(cmd[:6]))
 
