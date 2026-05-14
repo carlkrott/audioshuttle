@@ -105,14 +105,31 @@ def launch(
         model_server = ModelServer(settings)
 
         if not no_model and settings.model_enabled:
-            # Start our own llama-server subprocess
-            started = model_server.start(wait=True, timeout=60.0)
-            if started:
-                logger.info("E2B model server ready (spawned)")
-                model_ok = True
-            else:
-                logger.warning("E2B model server failed — text-only mode")
-                model_server = None
+            # First, check if an external server is already running on the target port.
+            # Prefer external over embedded (external may have mmproj loaded, etc.)
+            try:
+                import httpx as _httpx
+                health_url = settings.model_api_url.replace("/v1/chat/completions", "/health")
+                resp = _httpx.get(health_url, timeout=3.0)
+                if resp.status_code == 200:
+                    logger.info("External model server already running — using external mode")
+                    model_server.enable_external()
+                    model_ok = True
+                else:
+                    model_server = None
+            except Exception:
+                # No external server — start our own
+                pass
+
+            if not model_ok:
+                # Start our own llama-server subprocess
+                started = model_server.start(wait=True, timeout=60.0)
+                if started:
+                    logger.info("E2B model server ready (spawned)")
+                    model_ok = True
+                else:
+                    logger.warning("E2B model server failed — text-only mode")
+                    model_server = None
         else:
             # External server — probe for pre-existing model server
             model_server.enable_external()

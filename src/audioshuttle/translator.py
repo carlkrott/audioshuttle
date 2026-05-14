@@ -81,6 +81,9 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "set_loop_points": {"start": float, "end": float},
     # Actions
     "trigger_action": {"command_id": int},
+    # Vision & Audio Analysis (multimodal — E2B sees/screenshots/hears spectrograms)
+    "look_and_analyze": {"question": str},
+    "listen_and_analyze": {"track": int | None, "start_sec": float, "duration_sec": float, "question": str},
 }
 
 SYSTEM_PROMPT = """Translate DAW commands to JSON. Output ONLY {"tool":...} or [{"tool":...}].
@@ -136,6 +139,10 @@ Transport:
 - set_marker_name: {"marker": int, "name": str}
 - set_loop_points: {"start": float, "end": float}
 - trigger_action: {"command_id": int}
+
+Vision & Audio Analysis (E2B multimodal — captures screen/spectrogram):
+- look_and_analyze: {"question": str} — Capture Reaper screenshot and ask E2B to analyze it. Use when user says "look at", "show me", "does this look", "check the arrangement", "how does it look", "what do you see".
+- listen_and_analyze: {"track": int|null, "start_sec": float, "duration_sec": float, "question": str} — Render audio, convert to spectrogram, ask E2B to analyze. Use when user says "how does it sound", "listen to", "check the mix", "how's the bass". Default: track=null (full mix), start=0, duration=30.
 
 Rules:
 - New tracks go at bottom. If N tracks exist, first insert = N+1.
@@ -259,6 +266,13 @@ class IntentTranslator:
             },
         ]
 
+        # Emit STT event for the thinking stream
+        try:
+            from audioshuttle.thinking_stream import ThinkingStream
+            ThinkingStream.instance().emit_stt(user_input)
+        except Exception:
+            pass
+
         raw = self._model_server.chat(
             messages, temperature=0.1, max_tokens=4096
         )
@@ -270,7 +284,19 @@ class IntentTranslator:
             )]
 
         logger.info("Model raw response: %s", raw[:500])
-        return self._parse_response_multi(raw, method="model")
+
+        # Emit tool calls to thinking stream
+        results = self._parse_response_multi(raw, method="model")
+        try:
+            from audioshuttle.thinking_stream import ThinkingStream
+            ts = ThinkingStream.instance()
+            for r in results:
+                if r.success:
+                    ts.emit_tool_call(r.tool, r.args)
+        except Exception:
+            pass
+
+        return results
 
     def _translate_with_rules(
         self, user_input: str, daw_state: DAWState

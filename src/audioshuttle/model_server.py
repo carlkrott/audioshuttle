@@ -1,19 +1,44 @@
-"""Embedded model server lifecycle management."""
+"""Embedded model server lifecycle management.
+
+Supports both synchronous and streaming chat, with multimodal content
+(images, audio as spectrogram images) for Gemma 4 E2B.
+"""
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
 import subprocess
 import time
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
-from typing import Any
+from typing import Any, Generator
 
 import httpx
 
 from audioshuttle.config import Settings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StreamEvent:
+    """A single event from a streaming chat response."""
+
+    type: str  # "thinking" | "content" | "done"
+    text: str = ""
+    source: str = "e2b"  # which model/source produced this
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return {
+            "type": self.type,
+            "text": self.text,
+            "source": self.source,
+            "ts": self.timestamp,
+        }
 
 
 class ModelServer:
@@ -233,6 +258,194 @@ class ModelServer:
         except Exception as e:
             logger.error("Model chat request failed: %s", e)
             return None
+
+    # ── Streaming Chat ──────────────────────────────────────────
+
+    def chat_streaming(
+        self,
+        messages: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> Generator[StreamEvent, None, None]:
+        """Stream a chat completion, yielding thinking/content/done events.
+
+        Parses SSE chunks from llama-server's streaming API.
+        E2B emits `delta.reasoning_content` for thinking and `delta.content`
+        for the actual response.
+
+        Yields:
+            StreamEvent objects with type "thinking", "content", or "done".
+        """
+        try:
+            payload = {
+                "model": self._settings.model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": True,
+            }
+
+            with httpx.stream(
+                "POST",
+                f"{self._base_url}/v1/chat/completions",
+                json=payload,
+                timeout=float(self._settings.model_timeout),
+            ) as response:
+                response.raise_for_status()
+
+                for line in response.iter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]  # strip "data: " prefix
+                    if data_str.strip() == "[DONE]":
+                        yield StreamEvent(type="done", source="e2b")
+                        return
+
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+
+                    delta = choices[0].get("delta", {})
+                    finish_reason = choices[0].get("finish_reason")
+
+                    # Thinking tokens
+                    reasoning = delta.get("reasoning_content", "")
+                    if reasoning:
+                        yield StreamEvent(
+                            type="thinking", text=reasoning, source="e2b"
+                        )
+
+                    # Content tokens
+                    content = delta.get("content", "")
+                    if content:
+                        yield StreamEvent(
+                            type="content", text=content, source="e2b"
+                        )
+
+                    # Finish
+                    if finish_reason:
+                        yield StreamEvent(
+                            type="done", text=finish_reason, source="e2b"
+                        )
+                        return
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Streaming chat HTTP error: %s", e)
+            yield StreamEvent(
+                type="done", text=f"error: HTTP {e.response.status_code}", source="e2b"
+            )
+        except Exception as e:
+            logger.error("Streaming chat failed: %s", e)
+            yield StreamEvent(
+                type="done", text=f"error: {e}", source="e2b"
+            )
+
+    # ── Multimodal Chat ────────────────────────────────────────
+
+    def chat_multimodal(
+        self,
+        messages: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """Send a multimodal chat completion (text + image/audio content).
+
+        Args:
+            messages: OpenAI-format messages with multipart content.
+                Each message content can be a string or list of content parts:
+                [
+                    {"type": "text", "text": "Describe this"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+                ]
+            temperature: Sampling temperature.
+            max_tokens: Max tokens in response.
+
+        Returns:
+            Assistant message content, or None on error.
+        """
+        try:
+            resp = httpx.post(
+                f"{self._base_url}/v1/chat/completions",
+                json={
+                    "model": self._settings.model_name,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                },
+                timeout=float(self._settings.model_timeout),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            message = data["choices"][0]["message"]
+            content = message.get("content", "")
+            if not content:
+                reasoning = message.get("reasoning_content", "")
+                if reasoning:
+                    content = reasoning
+            return content or None
+        except Exception as e:
+            logger.error("Multimodal chat request failed: %s", e)
+            return None
+
+    def chat_multimodal_streaming(
+        self,
+        messages: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> Generator[StreamEvent, None, None]:
+        """Stream a multimodal chat completion, yielding events.
+
+        Same as chat_streaming but accepts multipart message content.
+        """
+        yield from self.chat_streaming(messages, temperature, max_tokens)
+
+    # ── Content Helpers ────────────────────────────────────────
+
+    @staticmethod
+    def image_from_file(path: str) -> dict:
+        """Build an image_url content part from a file path.
+
+        Reads the file, base64-encodes it, and returns an OpenAI-format
+        image_url content part suitable for chat_multimodal().
+        """
+        mime_map = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }
+        ext = os.path.splitext(path)[1].lower()
+        mime = mime_map.get(ext, "image/png")
+
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"},
+        }
+
+    @staticmethod
+    def image_from_bytes(data: bytes, mime: str = "image/png") -> dict:
+        """Build an image_url content part from raw bytes."""
+        b64 = base64.b64encode(data).decode("ascii")
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"},
+        }
+
+    @staticmethod
+    def text_part(text: str) -> dict:
+        """Build a text content part."""
+        return {"type": "text", "text": text}
+
+    # ── Internals ──────────────────────────────────────────────
 
     def _extract_host(self) -> str:
         """Extract host from model_api_url."""

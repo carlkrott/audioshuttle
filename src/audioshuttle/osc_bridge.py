@@ -1196,6 +1196,298 @@ class ReaperOSC:
             reaper_feedback=feedback,
         )
 
+    def look_and_analyze(self, question: str = "Describe what you see") -> CommandResult:
+        """Capture Reaper screenshot and analyze with E2B vision.
+
+        Takes a screenshot of the Reaper window, sends it to E2B for
+        visual analysis along with the current DAW state context.
+
+        Args:
+            question: What to ask about the screenshot.
+
+        Returns:
+            CommandResult with E2B's analysis in reaper_feedback.
+        """
+        from audioshuttle.thinking_stream import ThinkingStream
+
+        ts = ThinkingStream.instance()
+        ts.clear_interrupt()
+
+        if not hasattr(self, "_model_server") or not self._model_server:
+            return CommandResult(
+                success=False,
+                address="/look",
+                error="Model server not available for vision analysis",
+            )
+
+        # Capture screenshot
+        ts.emit_vision("Capturing Reaper window...")
+        from audioshuttle.screen_capture import capture_reaper_window
+        screenshot_path = capture_reaper_window()
+        if not screenshot_path:
+            ts.emit_error("Screen capture failed")
+            return CommandResult(
+                success=False,
+                address="/look",
+                error="Could not capture Reaper window",
+            )
+
+        ts.emit_vision(f"Screenshot captured ({os.path.getsize(screenshot_path)} bytes)")
+
+        # Build DAW state context
+        state_context = self._format_state_for_vision()
+
+        # Build multimodal prompt
+        from audioshuttle.model_server import ModelServer
+        content_parts = [
+            ModelServer.image_from_file(screenshot_path),
+            ModelServer.text_part(
+                f"This is a screenshot of a Reaper DAW project.\n"
+                f"{state_context}\n\n"
+                f"Question: {question}\n\n"
+                f"Provide a clear, concise answer. Describe what you see in the "
+                f"arrangement, track layout, and any issues you notice."
+            ),
+        ]
+
+        messages = [{"role": "user", "content": content_parts}]
+
+        # Stream the response
+        ts.emit_vision("Analyzing screenshot with E2B vision...")
+        analysis_parts = []
+        for event in self._model_server.chat_multimodal_streaming(
+            messages, temperature=0.3, max_tokens=4096
+        ):
+            if ts.is_interrupted():
+                ts.emit_done("interrupt")
+                break
+            if event.type == "thinking_token":
+                ts.emit_thinking(event.text, "vision")
+            elif event.type == "content_token":
+                analysis_parts.append(event.text)
+                ts.emit_content(event.text, "vision")
+            elif event.type == "done":
+                break
+
+        analysis = "".join(analysis_parts).strip()
+        ts.emit_done("vision")
+
+        if not analysis:
+            return CommandResult(
+                success=False,
+                address="/look",
+                error="E2B vision returned no response",
+            )
+
+        self._log_command("look_and_analyze", f"Q: {question} | A: {analysis[:200]}")
+        return CommandResult(
+            success=True,
+            address="/look",
+            reaper_feedback=analysis,
+        )
+
+    def listen_and_analyze(
+        self,
+        track: int | None = None,
+        start_sec: float = 0,
+        duration_sec: float = 30,
+        question: str = "Describe the audio quality and mix",
+    ) -> CommandResult:
+        """Render audio and analyze with E2B via spectrogram image.
+
+        Since llama-server doesn't support input_audio directly, this
+        renders audio to WAV, converts to a spectrogram image, and
+        sends it as a vision query.
+
+        Args:
+            track: Track number to solo (None = full mix).
+            start_sec: Start time in seconds.
+            duration_sec: Duration to render.
+            question: What to ask about the audio.
+
+        Returns:
+            CommandResult with E2B's analysis.
+        """
+        from audioshuttle.thinking_stream import ThinkingStream
+
+        ts = ThinkingStream.instance()
+        ts.clear_interrupt()
+
+        if not hasattr(self, "_model_server") or not self._model_server:
+            return CommandResult(
+                success=False,
+                address="/listen",
+                error="Model server not available for audio analysis",
+            )
+
+        was_soloed = None
+        try:
+            # Solo the target track if specified
+            if track is not None:
+                ts.emit_audio(f"Soloing track {track} for rendering...")
+                # Save current solo state
+                if hasattr(self, 'state') and self.state:
+                    for t in self.state.tracks:
+                        if t.track_number == track:
+                            was_soloed = t.solo
+                            break
+                self.set_track_solo(track, True)
+
+            # Render audio section via Lua trigger
+            ts.emit_audio(f"Rendering {duration_sec}s from {start_sec}s...")
+            wav_path = f"/tmp/audioshuttle_render_{track or 'mix'}.wav"
+            render_ok = self._render_audio_section(start_sec, duration_sec, wav_path)
+
+            if not render_ok or not os.path.exists(wav_path):
+                ts.emit_error("Audio render failed")
+                return CommandResult(
+                    success=False,
+                    address="/listen",
+                    error="Could not render audio section",
+                )
+
+            ts.emit_audio(f"Rendered {os.path.getsize(wav_path)} bytes WAV")
+
+            # Convert to spectrogram image
+            ts.emit_audio("Generating spectrogram...")
+            spectrogram_path = self._wav_to_spectrogram(wav_path)
+
+            if not spectrogram_path:
+                ts.emit_error("Spectrogram generation failed")
+                return CommandResult(
+                    success=False,
+                    address="/listen",
+                    error="Could not generate spectrogram",
+                )
+
+            # Build multimodal prompt
+            state_context = self._format_state_for_vision()
+            track_desc = f"track {track}" if track else "full mix"
+
+            from audioshuttle.model_server import ModelServer
+            content_parts = [
+                ModelServer.image_from_file(spectrogram_path),
+                ModelServer.text_part(
+                    f"This is a spectrogram of the {track_desc} from a Reaper DAW project.\n"
+                    f"Time range: {start_sec}s to {start_sec + duration_sec}s\n"
+                    f"{state_context}\n\n"
+                    f"Question: {question}\n\n"
+                    f"Analyze the spectrogram: describe the frequency content, "
+                    f"dynamics, any issues (clipping, mud, harsh frequencies), "
+                    f"and the overall character of the sound."
+                ),
+            ]
+
+            messages = [{"role": "user", "content": content_parts}]
+
+            # Stream the response
+            ts.emit_audio("Analyzing spectrogram with E2B vision...")
+            analysis_parts = []
+            for event in self._model_server.chat_multimodal_streaming(
+                messages, temperature=0.3, max_tokens=4096
+            ):
+                if ts.is_interrupted():
+                    ts.emit_done("interrupt")
+                    break
+                if event.type == "thinking_token":
+                    ts.emit_thinking(event.text, "audio")
+                elif event.type == "content_token":
+                    analysis_parts.append(event.text)
+                    ts.emit_content(event.text, "audio")
+                elif event.type == "done":
+                    break
+
+            analysis = "".join(analysis_parts).strip()
+            ts.emit_done("audio")
+
+            if not analysis:
+                return CommandResult(
+                    success=False,
+                    address="/listen",
+                    error="E2B returned no audio analysis",
+                )
+
+            self._log_command("listen_and_analyze", f"Track={track} | Q: {question} | A: {analysis[:200]}")
+            return CommandResult(
+                success=True,
+                address="/listen",
+                reaper_feedback=analysis,
+            )
+
+        finally:
+            # Restore solo state
+            if track is not None and was_soloed is not None:
+                try:
+                    self.set_track_solo(track, was_soloed)
+                except Exception:
+                    pass
+
+    def _render_audio_section(
+        self, start_sec: float, duration_sec: float, output_path: str,
+    ) -> bool:
+        """Render a section of audio to WAV via Lua trigger.
+
+        Uses Reaper's render functionality triggered through the Lua watcher.
+        """
+        # Write render trigger for the Lua watcher
+        trigger_content = f"render:{start_sec:.2f}:{duration_sec:.2f}:{output_path}"
+        return self._lua_trigger("render_trigger", trigger_content, timeout=30.0)
+
+    @staticmethod
+    def _wav_to_spectrogram(wav_path: str) -> str | None:
+        """Convert a WAV file to a spectrogram PNG using ffmpeg + sox."""
+        import subprocess
+
+        output_path = wav_path.rsplit(".", 1)[0] + "_spectrogram.png"
+
+        # Try sox first (best spectrograms)
+        try:
+            result = subprocess.run(
+                ["sox", wav_path, "-n", "spectrogram",
+                 "-o", output_path, "-x", "1280", "-y", "720"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and os.path.exists(output_path):
+                return output_path
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+        # Fallback: use ffmpeg to generate a spectrogram
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", wav_path,
+                 "-lavfi", "showspectrumpic=s=1280x720:legend=1",
+                 "-frames:v", "1", output_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and os.path.exists(output_path):
+                return output_path
+        except FileNotFoundError:
+            logger.error("Neither sox nor ffmpeg available for spectrogram")
+        except Exception as e:
+            logger.error("Spectrogram generation failed: %s", e)
+
+        return None
+
+    def _format_state_for_vision(self) -> str:
+        """Format current DAW state for inclusion in vision prompts."""
+        parts = []
+        if hasattr(self, 'state') and self.state:
+            s = self.state
+            if s.tracks:
+                track_desc = ", ".join(
+                    f"T{t.track_number}={t.name or 'unnamed'}"
+                    for t in s.tracks[:10]
+                )
+                parts.append(f"Tracks ({len(s.tracks)}): {track_desc}")
+            if s.transport.tempo > 0:
+                parts.append(f"Tempo: {s.transport.tempo:.0f} BPM")
+            if s.transport.playing:
+                parts.append(f"Playing at {s.transport.position_seconds:.1f}s")
+        return "\n".join(parts) if parts else "No DAW state available"
+
     def _generate_arrangement(
         self,
         midi: "MIDIFile",

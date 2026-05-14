@@ -188,6 +188,16 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             "trigger_action": lambda: bridge.trigger_action(
                 int(args["command_id"])
             ),
+            # Vision & Audio Analysis (multimodal)
+            "look_and_analyze": lambda: bridge.look_and_analyze(
+                str(args.get("question", "Describe what you see"))
+            ),
+            "listen_and_analyze": lambda: bridge.listen_and_analyze(
+                track=int(args["track"]) if args.get("track") is not None else None,
+                start_sec=float(args.get("start_sec", 0)),
+                duration_sec=float(args.get("duration_sec", 30)),
+                question=str(args.get("question", "Describe the audio quality and mix")),
+            ),
         }
 
         executor = tool_map.get(name)
@@ -261,6 +271,20 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             if cmd_result is None:
                 errors.append(f"Unknown tool: {tool_name}")
                 continue
+
+            # Emit tool result to thinking stream
+            try:
+                from audioshuttle.thinking_stream import ThinkingStream
+                ts = ThinkingStream.instance()
+                ok = cmd_result.success if hasattr(cmd_result, "success") else True
+                detail = ""
+                if hasattr(cmd_result, "reaper_feedback") and cmd_result.reaper_feedback:
+                    detail = cmd_result.reaper_feedback[:80]
+                elif hasattr(cmd_result, "error") and cmd_result.error:
+                    detail = cmd_result.error[:80]
+                ts.emit_tool_result(tool_name, ok, detail)
+            except Exception:
+                pass
 
             executed.append({
                 "tool": tool_name,
@@ -372,6 +396,44 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             "track_count": raw_state.track_count if raw_state else 0,
             "tracks": tracks,
             "transport": transport,
+        }
+
+    # ── Thinking Stream Tools ──────────────────────────────────
+
+    @mcp.tool()
+    def daw_thinking(n: int = 50) -> dict[str, Any]:
+        """Get recent E2B thinking/events log.
+
+        Shows what the model is currently thinking or has thought recently.
+        Useful for understanding model reasoning during long operations.
+
+        Args:
+            n: Number of recent events to return (default 50).
+        """
+        from audioshuttle.thinking_stream import ThinkingStream
+        ts = ThinkingStream.instance()
+        events = ts.get_recent_dicts(n)
+        return {
+            "count": len(events),
+            "events": events,
+        }
+
+    @mcp.tool()
+    def daw_interrupt(reason: str = "user requested") -> dict[str, Any]:
+        """Interrupt current E2B thinking/execution.
+
+        Stops the current model operation mid-stream. Use when the model
+        is taking too long or heading in the wrong direction.
+
+        Args:
+            reason: Why the interrupt was requested.
+        """
+        from audioshuttle.thinking_stream import ThinkingStream
+        ts = ThinkingStream.instance()
+        ts.interrupt(reason)
+        return {
+            "interrupted": True,
+            "reason": reason,
         }
 
     return mcp

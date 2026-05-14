@@ -157,6 +157,16 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         "open_fx_ui": lambda: bridge.open_fx_ui(
             int(args["track"]), int(args["fx"]),
         ),
+        # Vision & Audio Analysis (multimodal)
+        "look_and_analyze": lambda: bridge.look_and_analyze(
+            str(args.get("question", "Describe what you see"))
+        ),
+        "listen_and_analyze": lambda: bridge.listen_and_analyze(
+            track=int(args["track"]) if args.get("track") is not None else None,
+            start_sec=float(args.get("start_sec", 0)),
+            duration_sec=float(args.get("duration_sec", 30)),
+            question=str(args.get("question", "Describe the audio quality and mix")),
+        ),
     }
 
     # Discovery tools — no bridge call needed

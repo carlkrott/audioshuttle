@@ -52,7 +52,7 @@ class TestTranslationResult:
 class TestToolSchemas:
     """Test TOOL_SCHEMAS has all expected tools."""
 
-    def test_all_51_tools_present(self):
+    def test_all_53_tools_present(self):
         expected = {
             "list_tracks", "get_transport", "get_daw_state", "get_track_count",
             "transport_control", "transport_seek",
@@ -72,6 +72,7 @@ class TestToolSchemas:
             "goto_marker", "set_marker_name", "set_loop_points",
             "create_song_structure", "generate_project",
             "assess_arrangement",
+            "look_and_analyze", "listen_and_analyze",
         }
         assert expected == set(TOOL_SCHEMAS.keys()), \
             f"Missing: {expected - set(TOOL_SCHEMAS.keys())}, Extra: {set(TOOL_SCHEMAS.keys()) - expected}"
