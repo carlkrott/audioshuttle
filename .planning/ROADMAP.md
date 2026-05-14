@@ -59,13 +59,13 @@
 
 ---
 
-### Phase 6: Model-Driven Project Generation
+### Phase 6: Model-Driven Project Generation ✅
 **Goal:** E2B model auto-generates complete genre-aware projects with buses, FX chains, and per-section MIDI. Pipeline with state verification between steps.
 
-**Plans:** 3 plans in 3 waves
-- [ ] 06-01-PLAN.md — Genre profile database (tempo, sections, instruments, routing, FX chains for 11+ genres)
-- [ ] 06-02-PLAN.md — Enhanced project pipeline (create_genre_project, bus/submaster routing, per-track FX, watcher hardening)
-- [ ] 06-03-PLAN.md — System prompt + model integration (genre detection, MCP wiring, E2E tests)
+**Plans:** 3 plans in 3 waves — ALL COMPLETE
+- [x] 06-01-PLAN.md — Genre profile database (tempo, sections, instruments, routing, FX chains for 11+ genres)
+- [x] 06-02-PLAN.md — Enhanced project pipeline (create_genre_project, bus/submaster routing, per-track FX, watcher hardening)
+- [x] 06-03-PLAN.md — System prompt + model integration (genre detection, MCP wiring, E2E tests)
 
 ---
 
