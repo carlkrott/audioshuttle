@@ -51,6 +51,14 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     "create_song_structure": {"sections": list, "bpm": int | None},
     "generate_project": {"sections": list, "instruments": list, "key": str, "scale": str, "bpm": int},
     "assess_arrangement": {"key": str, "scale": str, "bpm": int, "sections": list, "instruments": list},
+    "create_genre_project": {
+        "genre": str,
+        "tempo": int | None,
+        "key": str,
+        "scale": str,
+        "custom_instruments": list | None,
+        "custom_sections": list | None,
+    },
     # FX
     "set_fx_param": {"track": int, "fx": int, "param": int, "value": float},
     "fx_bypass": {"track": int, "fx": int, "bypass": bool},
@@ -118,6 +126,36 @@ Transport:
 - generate_project: {"sections": [{"name": str, "bars": int}], "instruments": ["drums","bass","melody","keys","strings","lead","pad","arp","fx","sub"], "key": str, "scale": "major"/"minor"/"pentatonic"/"blues", "bpm": int}
   Creates full project: markers + tracks + section-aware MIDI arrangement. SINGLE command, do NOT split.
   Section-aware: intro=sparsedrums+keys, verse=drums+bass+keys+melody, chorus=ALL instruments loud, bridge=keys+pad+strings, outro=winding down.
+- create_genre_project: {"genre": str, "tempo": int|null, "key": str, "scale": str, "custom_instruments": list[str]|null, "custom_sections": list|null}
+   Creates a complete genre-aware project with auto-routing, buses, FX chains per track, and per-section MIDI.
+   PREFER this over generate_project when user mentions a genre or wants a complete project setup.
+
+   Genre detection — map user request to one of these genres:
+   - "rock", "metal", "punk", "grunge", "alternative" → genre="rock"
+   - "pop", "dance", "edm", "electro", "house", "techno", "trance", "dubstep" → genre="electronic"
+   - "hip hop", "rap", "trap", "hiphop", "rnb" → genre="hiphop"
+   - "jazz", "swing", "bebop", "fusion" → genre="jazz"
+   - "classical", "orchestral", "symphony", "film score" → genre="orchestral"
+   - "ambient", "atmospheric", "drone", "soundscape" → genre="ambient"
+   - "funk", "soul" → genre="funk"
+   - "blues", "delta blues" → genre="blues"
+   - "reggae", "dub", "ska" → genre="reggae"
+   - If NO genre detected, use genre="rock" as default
+
+   Tempo detection — extract BPM if user specifies:
+   - "at 140 bpm", "140 bpm", "tempo 140" → tempo=140
+   - If not specified, use genre's default tempo
+
+   Instrument overrides — respect user requests:
+   - "with piano and strings" → custom_instruments=["keys", "strings"]
+   - "just drums and bass" → custom_instruments=["drums", "bass"]
+   - If not specified, use genre's default instruments
+
+   Section overrides — respect user requests:
+   - "intro verse chorus" → custom_sections=[{"name":"Intro","bars":4},{"name":"Verse","bars":16},{"name":"Chorus","bars":8}]
+   - If not specified, use genre's default sections
+
+   SINGLE command — do NOT split into multiple calls. This tool handles everything: tempo, markers, tracks, plugins, MIDI, buses, FX chains, and routing.
 - assess_arrangement: {"key": str, "scale": str, "bpm": int, "sections": list, "instruments": list} — Ask E2B model to rate the arrangement quality and suggest improvements.
 - create_song_structure: {"sections": [{"name": str, "bars": int}], "bpm": int}
 - set_fx_param: {"track": int, "fx": int, "param": int, "value": float}
@@ -149,7 +187,8 @@ Rules:
 - "mute" = mute:true, "unmute" = mute:false
 - "turn up" ≈ 0.85, "turn down" ≈ 0.5, "normal" ≈ 0.75
 - "arm for recording" → arm=true + monitor mode=1
-- "create project"/"generate project"/"new project"/"set up song" → generate_project
+- "create project"/"generate project"/"new project"/"set up song" AND genre mentioned → create_genre_project (prefer over generate_project)
+- "create project"/"generate project" WITHOUT genre → create_genre_project with genre="rock" (default)
 - "add markers"/"song structure" → create_song_structure
 - Multiple commands use array with optional delay_ms
 - Track numbers start at 1. FX/send indices are 0-based.
@@ -158,7 +197,12 @@ Examples:
   "play" → {"tool":"transport_control","args":{"action":"play"}}
   "mute drums and solo bass" (drums=T1,bass=T2) → [{"tool":"set_track_mute","args":{"track":1,"mute":true}},{"tool":"set_track_solo","args":{"track":2,"solo":true}}]
   "add drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
-  "create project in D minor with drums bass melody, verse chorus verse" → {"tool":"generate_project","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16}],"instruments":["drums","bass","melody"],"key":"D","scale":"minor","bpm":120}}
+  "create a rock project" → {"tool":"create_genre_project","args":{"genre":"rock"}}
+   "make me a jazz track at 140 bpm" → {"tool":"create_genre_project","args":{"genre":"jazz","tempo":140}}
+   "create an EDM banger" → {"tool":"create_genre_project","args":{"genre":"electronic"}}
+   "new project with drums and bass" → {"tool":"create_genre_project","args":{"genre":"rock","custom_instruments":["drums","bass"]}}
+   "create a pop song with piano and strings at 100 bpm" → {"tool":"create_genre_project","args":{"genre":"rock","tempo":100,"custom_instruments":["keys","strings"]}}
+   "create project in D minor with drums bass melody, verse chorus verse" → {"tool":"generate_project","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16}],"instruments":["drums","bass","melody"],"key":"D","scale":"minor","bpm":120}}
   "set tempo 140 and play" → [{"tool":"set_tempo","args":{"bpm":140}},{"tool":"transport_control","args":{"action":"play"}}]
   "more reverb on track 2" → {"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.8}}
   "put reasyndr on drums track" (drums=T1) → {"tool":"load_plugin","args":{"track":1,"plugin_name":"ReaSynDr"}}

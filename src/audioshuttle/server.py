@@ -174,6 +174,14 @@ def create_server(settings: Settings | None = None) -> FastMCP:
                 scale=str(args.get("scale", "major")),
                 bpm=int(args.get("bpm", 120)),
             ),
+            "create_genre_project": lambda: bridge.create_genre_project(
+                genre=args.get("genre", "rock"),
+                tempo=args.get("tempo"),
+                key=args.get("key", "C"),
+                scale=args.get("scale", "major"),
+                custom_instruments=args.get("custom_instruments"),
+                custom_sections=args.get("custom_sections"),
+            ),
             "goto_marker": lambda: bridge.goto_marker(int(args["marker"])),
             "set_marker_name": lambda: bridge.set_marker_name(
                 int(args["marker"]), str(args["name"])
