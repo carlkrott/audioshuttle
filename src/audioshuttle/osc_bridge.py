@@ -1382,6 +1382,12 @@ class ReaperOSC:
             base_track_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
             results.append(f"Tracks: {num_instruments} instruments")
 
+            # Populate instrument_track_map immediately after track creation
+            # (before Step 4 uses it for bus/submaster index calculations)
+            track_offset = base_track_count + 1
+            for i, inst in enumerate(instruments):
+                instrument_track_map[inst] = track_offset + i
+
             # ── Step 4: Create bus tracks + Submaster ─────────────────
             # Determine which families need buses (>1 instrument in family)
             family_instrument_count: dict[str, list[str]] = {}
@@ -1420,11 +1426,8 @@ class ReaperOSC:
             results.append(f"Buses: {list(bus_track_map.keys())}")
 
             # ── Step 5: Rename tracks + load instrument plugins ───────
-            track_offset = base_track_count + 1
-            for i, inst in enumerate(instruments):
-                track_idx = track_offset + i
+            for inst, track_idx in instrument_track_map.items():
                 role = inst.lower().strip()
-                instrument_track_map[inst] = track_idx
                 self.rename_track(track_idx, role.capitalize())
                 _time.sleep(0.2)
 
@@ -1547,7 +1550,24 @@ class ReaperOSC:
                     plugin_name = fx_def.get("name", "")
                     if not plugin_name:
                         continue
-                    result = self._fx_trigger("add", track_idx, plugin_name, wait=4.0)
+
+                    # Wait for watcher if it's unresponsive (liveness gate)
+                    if not _watcher_alive():
+                        logger.info("create_genre_project: waiting for watcher before FX...")
+                        recovered = False
+                        for _ in range(5):
+                            _time.sleep(3.0)
+                            if _watcher_alive():
+                                recovered = True
+                                break
+                        if not recovered:
+                            logger.warning(
+                                "create_genre_project: watcher still dead, skipping remaining FX on %s",
+                                role,
+                            )
+                            break
+
+                    result = self._fx_trigger("add", track_idx, plugin_name, wait=10.0)
                     if result.get("success"):
                         logger.info(
                             "create_genre_project: applied %s to track %d",
