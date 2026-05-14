@@ -951,7 +951,29 @@ class ReaperOSC:
                 if not os.path.exists(alive_path):
                     return False
                 mtime = os.path.getmtime(alive_path)
-                return (time.time() - mtime) < 5.0
+                if (time.time() - mtime) > 15.0:
+                    # Stale — retry once after 3s
+                    _time.sleep(3.0)
+                    if not os.path.exists(alive_path):
+                        return False
+                    mtime = os.path.getmtime(alive_path)
+                    if (time.time() - mtime) > 15.0:
+                        return False
+                # Secondary: check tick counter monotonic increase
+                try:
+                    with open(alive_path, "r") as f:
+                        content = f.read()
+                    if "tick=" in content:
+                        parts = content.split("tick=")
+                        if len(parts) >= 2:
+                            current_tick = int(parts[1].split()[0].strip())
+                            if hasattr(_watcher_alive, "_last_tick"):
+                                if current_tick <= _watcher_alive._last_tick:
+                                    return False
+                            _watcher_alive._last_tick = current_tick
+                except (OSError, ValueError):
+                    pass
+                return True
             except OSError:
                 return False
 
@@ -1061,7 +1083,7 @@ class ReaperOSC:
 
             # Wait for import (up to 5s — Lua processes one trigger per tick)
             imported = False
-            for _ in range(25):
+            for _ in range(40):
                 time.sleep(0.2)
                 if not os.path.exists(trigger_path):
                     imported = True
@@ -1075,7 +1097,7 @@ class ReaperOSC:
             plugin_name = self._INSTRUMENT_PLUGINS.get(role)
             if plugin_name:
                 time.sleep(0.5)
-                fx_result = self._fx_trigger("add", new_track, plugin_name, wait=2.0)
+                fx_result = self._fx_trigger("add", new_track, plugin_name, wait=4.0)
                 if fx_result.get("success"):
                     results.append(
                         f"{role.capitalize()} (T{new_track}) + {plugin_name}"
@@ -1093,6 +1115,7 @@ class ReaperOSC:
                 results.append(f"{role.capitalize()} (T{new_track})")
 
             time.sleep(0.3)
+            time.sleep(1.0)  # Watcher fragility buffer between instruments
 
         key_desc = f"{key} {scale}"
         self._log_command(
@@ -1195,6 +1218,443 @@ class ReaperOSC:
             address="/assess",
             reaper_feedback=feedback,
         )
+
+    def create_genre_project(
+        self,
+        genre: str = "rock",
+        tempo: int | None = None,
+        key: str = "C",
+        scale: str = "major",
+        custom_instruments: list[str] | None = None,
+        custom_sections: list[dict] | None = None,
+    ) -> CommandResult:
+        """Create a complete genre-aware Reaper project with bus routing and FX chains.
+
+        Pipeline: tempo → markers → tracks → buses → plugins → MIDI → FX → routing → verify
+
+        Args:
+            genre: Genre name (case-insensitive). Looks up from genre_profiles.
+            tempo: Override genre default tempo. None = use genre default.
+            key: Musical key (C, D, E, etc.).
+            scale: Scale type (major, minor, pentatonic, blues).
+            custom_instruments: Override instruments list. None = use genre default.
+            custom_sections: Override section list. None = use genre default.
+        """
+        import time as _time
+        import json as _json
+
+        # ── Step 0: Genre resolution ─────────────────────────────────
+        try:
+            from audioshuttle.genre_profiles import (
+                get_genre, get_family, get_fx_chain, get_tempo,
+                INSTRUMENT_FAMILIES,
+            )
+        except ImportError:
+            return CommandResult(
+                success=False, address="/project/genre",
+                error="genre_profiles module not available",
+            )
+
+        profile = get_genre(genre)
+        resolved_tempo = get_tempo(genre, tempo)
+        instruments = custom_instruments or profile["instruments"]
+        sections = custom_sections or profile["sections"]
+
+        logger.info(
+            "create_genre_project: genre=%s tempo=%d instruments=%s sections=%s",
+            genre, resolved_tempo, instruments,
+            [(s["name"], s["bars"]) for s in sections],
+        )
+
+        results: list[str] = []
+        instrument_track_map: dict[str, int] = {}
+        bus_track_map: dict[str, int] = {}
+        submaster_idx: int | None = None
+
+        def _watcher_alive() -> bool:
+            """Check if Lua watcher defer loop is still running."""
+            try:
+                alive_path = "/tmp/audioshuttle_watcher_alive"
+                if not os.path.exists(alive_path):
+                    return False
+                mtime = os.path.getmtime(alive_path)
+                if (time.time() - mtime) > 15.0:
+                    # Stale — retry once after 3s
+                    _time.sleep(3.0)
+                    if not os.path.exists(alive_path):
+                        return False
+                    mtime = os.path.getmtime(alive_path)
+                    if (time.time() - mtime) > 15.0:
+                        return False
+                # Secondary: check tick counter monotonic increase
+                try:
+                    with open(alive_path, "r") as f:
+                        content = f.read()
+                    if "tick=" in content:
+                        parts = content.split("tick=")
+                        if len(parts) >= 2:
+                            current_tick = int(parts[1].split()[0].strip())
+                            if hasattr(_watcher_alive, "_last_tick"):
+                                if current_tick <= _watcher_alive._last_tick:
+                                    return False
+                            _watcher_alive._last_tick = current_tick
+                except (OSError, ValueError):
+                    pass
+                return True
+            except OSError:
+                return False
+
+        def _read_daw_state_json() -> dict:
+            """Read and parse the DAW state JSON dump."""
+            state_path = "/tmp/audioshuttle_daw_state.json"
+            try:
+                with open(state_path, "r") as f:
+                    return _json.load(f)
+            except (OSError, _json.JSONDecodeError):
+                return {}
+
+        def _verify_project_state(
+            expected_tracks: int,
+            expected_markers: int,
+            description: str,
+        ) -> bool:
+            """Verify DAW state matches expectations. Returns True if OK."""
+            try:
+                self.refresh_state(wait=0.5)
+                state_data = _read_daw_state_json()
+                actual_tracks = state_data.get("track_count", 0)
+                actual_markers = len(state_data.get("markers", []))
+                if actual_tracks < expected_tracks:
+                    logger.warning(
+                        "%s: track count %d < expected %d",
+                        description, actual_tracks, expected_tracks,
+                    )
+                    return False
+                if actual_markers < expected_markers:
+                    logger.warning(
+                        "%s: marker count %d < expected %d",
+                        description, actual_markers, expected_markers,
+                    )
+                    return False
+                logger.info(
+                    "%s: verified %d tracks, %d markers",
+                    description, actual_tracks, actual_markers,
+                )
+                return True
+            except Exception as e:
+                logger.warning("%s: verification failed: %s", description, e)
+                return False
+
+        try:
+            # ── Step 1: Set tempo ──────────────────────────────────────
+            self.set_tempo(resolved_tempo)
+            results.append(f"Tempo: {resolved_tempo} BPM")
+            _time.sleep(0.5)
+            self.refresh_state(wait=0.5)
+            if hasattr(self, "state") and self.state:
+                actual_tempo = getattr(self.state.transport, "tempo", 0)
+                if abs(actual_tempo - resolved_tempo) > 1:
+                    logger.warning(
+                        "create_genre_project: tempo verification failed "
+                        "(expected %d, got %.0f)",
+                        resolved_tempo, actual_tempo,
+                    )
+            else:
+                logger.warning("create_genre_project: could not verify tempo")
+
+            # ── Step 2: Create markers ──────────────────────────────────
+            struct_result = self.create_song_structure(sections, bpm=resolved_tempo)
+            if struct_result.success:
+                results.append(f"Markers: {', '.join(s['name'] for s in sections)}")
+            else:
+                logger.warning("create_genre_project: markers failed: %s",
+                               struct_result.error)
+            _time.sleep(0.5)
+            _verify_project_state(0, len(sections), "Step 2: markers")
+
+            # ── Step 3: Create instrument tracks ───────────────────────
+            num_instruments = len(instruments)
+            inserted = self._insert_tracks_via_lua(count=num_instruments, wait=2.0)
+            if not inserted:
+                logger.warning("create_genre_project: track insert trigger not consumed")
+            _time.sleep(0.5)
+            self.refresh_state(wait=0.5)
+            base_track_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
+            results.append(f"Tracks: {num_instruments} instruments")
+
+            # ── Step 4: Create bus tracks + Submaster ─────────────────
+            # Determine which families need buses (>1 instrument in family)
+            family_instrument_count: dict[str, list[str]] = {}
+            for inst in instruments:
+                try:
+                    fam = get_family(inst)
+                    family_instrument_count.setdefault(fam, []).append(inst)
+                except ValueError:
+                    pass
+
+            buses_to_create = [
+                fam for fam, insts in family_instrument_count.items()
+                if len(insts) > 1
+            ]
+
+            # Create bus tracks
+            for bus_name in buses_to_create:
+                bus_track_num = base_track_count + len(bus_track_map) + len(instrument_track_map) + 1
+                inserted_bus = self._insert_tracks_via_lua(count=1, wait=1.0)
+                if inserted_bus:
+                    self.rename_track(bus_track_num, f"{bus_name.capitalize()} Bus")
+                    bus_track_map[bus_name] = bus_track_num
+                    logger.info("create_genre_project: created bus track %s", bus_name.capitalize())
+
+            # Create Submaster
+            sub_track_num = base_track_count + len(bus_track_map) + len(instrument_track_map) + 1
+            inserted_sub = self._insert_tracks_via_lua(count=1, wait=1.0)
+            if inserted_sub:
+                self.rename_track(sub_track_num, "Submaster")
+                submaster_idx = sub_track_num
+                logger.info("create_genre_project: created Submaster at track %d", sub_track_num)
+
+            _time.sleep(0.5)
+            expected_total = base_track_count + num_instruments + len(bus_track_map) + 1
+            _verify_project_state(expected_total, len(sections), "Step 4: buses")
+            results.append(f"Buses: {list(bus_track_map.keys())}")
+
+            # ── Step 5: Rename tracks + load instrument plugins ───────
+            track_offset = base_track_count + 1
+            for i, inst in enumerate(instruments):
+                track_idx = track_offset + i
+                role = inst.lower().strip()
+                instrument_track_map[inst] = track_idx
+                self.rename_track(track_idx, role.capitalize())
+                _time.sleep(0.2)
+
+                plugin_name = self._INSTRUMENT_PLUGINS.get(role)
+                if plugin_name:
+                    _time.sleep(0.3)
+                    fx_result = self._fx_trigger("add", track_idx, plugin_name, wait=4.0)
+                    if fx_result.get("success"):
+                        logger.info(
+                            "create_genre_project: loaded %s on track %d",
+                            plugin_name, track_idx,
+                        )
+                    else:
+                        logger.warning(
+                            "create_genre_project: failed to load %s on track %d",
+                            plugin_name, track_idx,
+                        )
+                _time.sleep(0.2)
+
+            # ── Step 6: Generate MIDI per section per instrument ───────
+            # Reuse the inner logic from generate_project — but just the
+            # _generate_arrangement call and MIDI write/import, not track creation
+            from midiutil import MIDIFile
+
+            key_parsed = str(key).strip()
+            scale_parsed = scale
+            for s in ("minor", "major", "pentatonic", "blues"):
+                if key_parsed.lower().endswith(s):
+                    scale_parsed = s
+                    key_parsed = key_parsed[: -(len(s))].strip()
+                    break
+            key_parsed = key_parsed.upper()
+            if len(key_parsed) > 1 and key_parsed[1] in ("#", "B"):
+                key_parsed = key_parsed[:2]
+            else:
+                key_parsed = key_parsed[0] if key_parsed else "C"
+
+            section_counts: dict[str, int] = {}
+            expanded = []
+            for sec in sections:
+                base_name = str(sec["name"]).split()[0]
+                section_counts.setdefault(base_name, 0)
+                section_counts[base_name] += 1
+                instance_name = f"{base_name} {section_counts[base_name]}"
+                expanded.append({"name": instance_name, "bars": sec["bars"]})
+
+            scale_notes = self._scale_notes(key_parsed, scale_parsed)
+
+            for i, inst in enumerate(instruments):
+                track_idx = instrument_track_map[inst]
+                role = inst.lower().strip()
+
+                if not _watcher_alive():
+                    logger.warning(
+                        "create_genre_project: watcher died before MIDI for %s",
+                        role,
+                    )
+                    results.append(f"{role.capitalize()} (SKIPPED — watcher dead)")
+                    _time.sleep(1.0)
+                    continue
+
+                # Generate MIDI
+                midi = MIDIFile(1)
+                mtrack = 0
+                midi.addTempo(mtrack, 0, resolved_tempo)
+                self._generate_arrangement(
+                    midi, mtrack, role, scale_notes, expanded, resolved_tempo,
+                )
+
+                buf = io.BytesIO()
+                midi.writeFile(buf)
+                midi_path = os.path.join(tempfile.gettempdir(), f"audioshuttle_{role}.mid")
+                with open(midi_path, "wb") as f:
+                    f.write(buf.getvalue())
+
+                # Clear existing items before import
+                self._clear_track_items(track_idx, wait=1.0)
+                _time.sleep(0.5)
+
+                # Import via watcher trigger
+                trigger_path = "/tmp/audioshuttle_import_trigger"
+                try:
+                    os.remove(trigger_path)
+                except OSError:
+                    pass
+
+                trigger_content = f"import:track:{track_idx}:{role}"
+                with open(trigger_path, "w") as f:
+                    f.write(trigger_content)
+                self._chown_to_reaper(trigger_path)
+
+                # Wait for import (up to 8s)
+                imported = False
+                for _ in range(40):
+                    _time.sleep(0.2)
+                    if not os.path.exists(trigger_path):
+                        imported = True
+                        break
+
+                results.append(
+                    f"{role.capitalize()} (T{track_idx})" +
+                    (" + imported" if imported else " (import timeout)")
+                )
+                logger.info(
+                    "create_genre_project: MIDI %s for %s (track %d)",
+                    "imported" if imported else "TIMEOUT", role, track_idx,
+                )
+
+                _time.sleep(1.0)  # Watcher fragility buffer
+
+            # ── Step 7: Apply FX chains ────────────────────────────────
+            for inst, track_idx in instrument_track_map.items():
+                role = inst.lower().strip()
+                try:
+                    fx_chain = get_fx_chain(role, genre)
+                except Exception:
+                    fx_chain = []
+
+                for fx_def in fx_chain:
+                    plugin_name = fx_def.get("name", "")
+                    if not plugin_name:
+                        continue
+                    result = self._fx_trigger("add", track_idx, plugin_name, wait=4.0)
+                    if result.get("success"):
+                        logger.info(
+                            "create_genre_project: applied %s to track %d",
+                            plugin_name, track_idx,
+                        )
+                    else:
+                        logger.warning(
+                            "create_genre_project: failed to apply %s to track %d",
+                            plugin_name, track_idx,
+                        )
+                    _time.sleep(2.0)  # Per-FX settle time
+
+                if fx_chain:
+                    results.append(f"{role.capitalize()} FX: {len(fx_chain)} plugins")
+
+            # ── Step 8: Route instruments to buses ─────────────────────
+            # First pass: instrument → bus (where applicable)
+            for inst, track_idx in instrument_track_map.items():
+                role = inst.lower().strip()
+                try:
+                    fam = get_family(role)
+                except ValueError:
+                    fam = None
+
+                if fam and fam in bus_track_map:
+                    # Route instrument → its bus
+                    bus_idx = bus_track_map[fam]
+                    send_result = self.create_send(track_idx, bus_idx)
+                    if send_result.success:
+                        logger.info(
+                            "create_genre_project: routed %s (T%d) → %s Bus (T%d)",
+                            role, track_idx, fam.capitalize(), bus_idx,
+                        )
+                    else:
+                        logger.warning(
+                            "create_genre_project: send %s → %s failed",
+                            role, fam,
+                        )
+
+            # Second pass: bus → Submaster
+            for bus_name, bus_idx in bus_track_map.items():
+                if submaster_idx is not None:
+                    send_result = self.create_send(bus_idx, submaster_idx)
+                    if send_result.success:
+                        logger.info(
+                            "create_genre_project: routed %s Bus (T%d) → Submaster (T%d)",
+                            bus_name.capitalize(), bus_idx, submaster_idx,
+                        )
+                    else:
+                        logger.warning(
+                            "create_genre_project: send %s Bus → Submaster failed",
+                            bus_name,
+                        )
+
+            # Third pass: instruments without a bus family → direct to Submaster
+            for inst, track_idx in instrument_track_map.items():
+                role = inst.lower().strip()
+                try:
+                    fam = get_family(role)
+                except ValueError:
+                    fam = None
+
+                if not fam or fam not in bus_track_map:
+                    if submaster_idx is not None:
+                        send_result = self.create_send(track_idx, submaster_idx)
+                        if send_result.success:
+                            logger.info(
+                                "create_genre_project: routed %s (T%d) → Submaster (T%d) [direct]",
+                                role, track_idx, submaster_idx,
+                            )
+
+            results.append(f"Routing: {len(bus_track_map)} buses + Submaster")
+
+            # ── Step 9: Final verification ─────────────────────────────
+            expected_tracks_final = base_track_count + num_instruments + len(bus_track_map) + 1
+            verified = _verify_project_state(
+                expected_tracks_final, len(sections), "Step 9: final verification",
+            )
+
+            section_names = ", ".join(s["name"] for s in expanded)
+            track_summaries = ", ".join(r for r in results if r and not r.startswith("Tempo") and not r.startswith("Markers"))
+            bus_names = ", ".join(f"{k} Bus" for k in bus_track_map.keys())
+            routing_summary = (
+                f"{len(instrument_track_map)} instruments, "
+                f"{len(bus_track_map)} buses → Submaster"
+            )
+
+            return CommandResult(
+                success=True,
+                address="/project/genre",
+                reaper_feedback=(
+                    f"Genre: {genre}, Tempo: {resolved_tempo}, Key: {key} {scale_parsed}\n"
+                    f"Sections: {section_names}\n"
+                    f"Tracks: {track_summaries}\n"
+                    f"Buses: {bus_names or '(none)'}\n"
+                    f"Routing: {routing_summary}"
+                ),
+            )
+
+        except Exception as e:
+            logger.error("create_genre_project: unexpected error: %s", e)
+            return CommandResult(
+                success=False,
+                address="/project/genre",
+                error=f"Pipeline error: {e}",
+                reaper_feedback="\n".join(results) if results else "",
+            )
 
     def look_and_analyze(self, question: str = "Describe what you see") -> CommandResult:
         """Capture Reaper screenshot and analyze with E2B vision.
