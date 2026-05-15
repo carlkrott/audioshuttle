@@ -1374,6 +1374,10 @@ class ReaperOSC:
 
             # ── Step 3: Create instrument tracks ───────────────────────
             num_instruments = len(instruments)
+            # Get current track count before insertion
+            self.refresh_state(wait=0.3)
+            base_track_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
+            
             inserted = self._insert_tracks_via_lua(count=num_instruments, wait=2.0)
             if not inserted:
                 logger.warning("create_genre_project: track insert trigger not consumed")
@@ -1389,6 +1393,7 @@ class ReaperOSC:
                 if attempt % 5 == 4:
                     logger.info("create_genre_project: waiting for tracks... %d/%d", current_tracks, expected_total)
             
+            # Update base_track_count to actual count after insertion
             base_track_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
             results.append(f"Tracks: {num_instruments} instruments")
 
