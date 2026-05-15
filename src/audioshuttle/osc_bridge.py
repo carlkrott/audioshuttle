@@ -1374,16 +1374,16 @@ class ReaperOSC:
 
             # ── Step 3: Create instrument tracks ───────────────────────
             num_instruments = len(instruments)
-            # Get current track count before insertion
+            # Get current track count BEFORE insertion
             self.refresh_state(wait=0.3)
-            base_track_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
+            pre_insertion_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
             
             inserted = self._insert_tracks_via_lua(count=num_instruments, wait=2.0)
             if not inserted:
                 logger.warning("create_genre_project: track insert trigger not consumed")
             
             # Wait for all tracks to be created (Lua watcher processes one per tick)
-            expected_total = base_track_count + num_instruments
+            expected_total = pre_insertion_count + num_instruments
             for attempt in range(30):  # up to 6s
                 _time.sleep(0.2)
                 self.refresh_state(wait=0.2)
@@ -1397,9 +1397,9 @@ class ReaperOSC:
             base_track_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
             results.append(f"Tracks: {num_instruments} instruments")
 
-            # Populate instrument_track_map immediately after track creation
-            # (before Step 4 uses it for bus/submaster index calculations)
-            track_offset = base_track_count + 1
+            # Populate instrument_track_map using PRE-insertion count
+            # (instruments start at pre_insertion_count + 1)
+            track_offset = pre_insertion_count + 1
             for i, inst in enumerate(instruments):
                 instrument_track_map[inst] = track_offset + i
 
