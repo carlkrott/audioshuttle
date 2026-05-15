@@ -1450,7 +1450,7 @@ class ReaperOSC:
                 logger.info("create_genre_project: created Submaster at track %d", sub_track_num)
 
             _time.sleep(0.5)
-            expected_total = base_track_count + num_instruments + len(bus_track_map) + 1
+            expected_total = pre_insertion_count + num_instruments + len(bus_track_map) + 1
             _verify_project_state(expected_total, len(sections), "Step 4: buses")
             results.append(f"Buses: {list(bus_track_map.keys())}")
 
