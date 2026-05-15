@@ -1671,7 +1671,7 @@ class ReaperOSC:
             results.append(f"Routing: {len(bus_track_map)} buses + Submaster")
 
             # ── Step 9: Final verification ─────────────────────────────
-            expected_tracks_final = base_track_count + num_instruments + len(bus_track_map) + 1
+            expected_tracks_final = pre_insertion_count + num_instruments + len(bus_track_map) + 1
             verified = _verify_project_state(
                 expected_tracks_final, len(sections), "Step 9: final verification",
             )
