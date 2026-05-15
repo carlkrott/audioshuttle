@@ -1377,8 +1377,18 @@ class ReaperOSC:
             inserted = self._insert_tracks_via_lua(count=num_instruments, wait=2.0)
             if not inserted:
                 logger.warning("create_genre_project: track insert trigger not consumed")
-            _time.sleep(0.5)
-            self.refresh_state(wait=0.5)
+            
+            # Wait for all tracks to be created (Lua watcher processes one per tick)
+            expected_total = base_track_count + num_instruments
+            for attempt in range(30):  # up to 6s
+                _time.sleep(0.2)
+                self.refresh_state(wait=0.2)
+                current_tracks = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
+                if current_tracks >= expected_total:
+                    break
+                if attempt % 5 == 4:
+                    logger.info("create_genre_project: waiting for tracks... %d/%d", current_tracks, expected_total)
+            
             base_track_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
             results.append(f"Tracks: {num_instruments} instruments")
 
@@ -1405,17 +1415,31 @@ class ReaperOSC:
 
             # Create bus tracks
             for bus_name in buses_to_create:
-                bus_track_num = base_track_count + len(bus_track_map) + len(instrument_track_map) + 1
+                bus_track_num = base_track_count + len(bus_track_map) + 1
                 inserted_bus = self._insert_tracks_via_lua(count=1, wait=1.0)
                 if inserted_bus:
+                    # Wait for track to actually appear
+                    for _ in range(10):
+                        _time.sleep(0.2)
+                        self.refresh_state(wait=0.2)
+                        current = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
+                        if current >= bus_track_num:
+                            break
                     self.rename_track(bus_track_num, f"{bus_name.capitalize()} Bus")
                     bus_track_map[bus_name] = bus_track_num
-                    logger.info("create_genre_project: created bus track %s", bus_name.capitalize())
+                    logger.info("create_genre_project: created bus track %s at T%d", bus_name.capitalize(), bus_track_num)
 
             # Create Submaster
-            sub_track_num = base_track_count + len(bus_track_map) + len(instrument_track_map) + 1
+            sub_track_num = base_track_count + len(bus_track_map) + 1
             inserted_sub = self._insert_tracks_via_lua(count=1, wait=1.0)
             if inserted_sub:
+                # Wait for track to actually appear
+                for _ in range(10):
+                    _time.sleep(0.2)
+                    self.refresh_state(wait=0.2)
+                    current = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
+                    if current >= sub_track_num:
+                        break
                 self.rename_track(sub_track_num, "Submaster")
                 submaster_idx = sub_track_num
                 logger.info("create_genre_project: created Submaster at track %d", sub_track_num)
