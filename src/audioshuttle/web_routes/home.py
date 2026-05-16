@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from typing import Any
 
@@ -188,11 +189,32 @@ async def replay_command(request: Request, cmd: str = ""):
                     daw_state = bridge.refresh_state(wait=0.3)
                 except Exception:
                     pass
-            result = translator.translate(cmd, daw_state)
-            if result.success and result.tool:
-                record_command(cmd, result.tool, True)
+            results = translator.translate_multi(cmd, daw_state)
+            if results and any(r.success for r in results):
                 from audioshuttle.error_log import error_log
-                error_log.add(f"Replay NL: '{cmd}' → {result.tool}", level="info")
+                executed = 0
+                for i, r in enumerate(results):
+                    if not r.success:
+                        error_log.add(f"Replay tool #{i} failed: {r.error}", level="warning")
+                        continue
+                    error_log.add(f"Replay NL: '{cmd}' → {r.tool} (step {i+1}/{len(results)})", level="info")
+                    # Execute the translated tool via daw_command on the bridge
+                    if bridge and hasattr(bridge, r.tool):
+                        try:
+                            tool_fn = getattr(bridge, r.tool)
+                            cmd_args = r.args if r.args else {}
+                            cmd_result = tool_fn(**cmd_args) if isinstance(cmd_args, dict) else tool_fn()
+                            error_log.add(f"Replay tool '{r.tool}' done: success={getattr(cmd_result, 'success', '?')}", level="info")
+                        except Exception as e:
+                            error_log.add(f"Replay tool '{r.tool}' exception: {e}", level="error")
+                    else:
+                        error_log.add(f"Replay tool '{r.tool}' skipped: bridge={bridge is not None} hasattr={hasattr(bridge, r.tool) if bridge else 'N/A'}", level="warning")
+                        continue
+                    executed += 1
+                    # Brief delay between tools — Reaper needs time to insert track before rename
+                    await asyncio.sleep(0.5)
+                record_command(cmd, f"multi({executed} tools)", True)
+                error_log.add(f"Replay: '{cmd}' → {executed} tool(s) executed", level="info")
             else:
                 record_command(cmd, "replay", False)
                 from audioshuttle.error_log import error_log

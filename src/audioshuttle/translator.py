@@ -221,6 +221,8 @@ Examples:
   "play" → {"tool":"transport_control","args":{"action":"play"}}
   "mute drums and solo bass" (drums=T1,bass=T2) → [{"tool":"set_track_mute","args":{"track":1,"mute":true}},{"tool":"set_track_solo","args":{"track":2,"solo":true}}]
   "add drum track" → [{"tool":"insert_track","args":{}},{"tool":"insert_midi_pattern","args":{"role":"drums"}}]
+  "create a track called Electric Guitar" (N tracks exist) → [{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":N+1,"name":"Electric Guitar"}}]
+  "make a new track named Bass" (N tracks exist) → [{"tool":"insert_track","args":{}},{"tool":"rename_track","args":{"track":N+1,"name":"Bass"}}]
   "create a rock project" → {"tool":"create_genre_project","args":{"genre":"rock"}}
    "make me a jazz track at 140 bpm" → {"tool":"create_genre_project","args":{"genre":"jazz","tempo":140}}
    "create an EDM banger" → {"tool":"create_genre_project","args":{"genre":"electronic"}}
@@ -478,9 +480,9 @@ class IntentTranslator:
     @staticmethod
     def _normalize_args(tool: str, args: dict) -> dict:
         """Fix common model output mistakes with argument names/values."""
-        # set_track_volume: model sometimes uses "value" instead of "volume"
-        if tool == "set_track_volume" and "value" in args and "volume" not in args:
-            args["volume"] = args.pop("value")
+        # set_track_volume: bridge uses "value", not "volume"
+        if tool == "set_track_volume" and "volume" in args:
+            args["value"] = args.pop("volume")
         # set_track_mute: model sometimes omits mute (default True for "mute")
         if tool == "set_track_mute" and "mute" not in args:
             args["mute"] = True
