@@ -1,15 +1,15 @@
 # AudioShuttle Multimodal + Live Thinking Implementation Plan
 
-## Current State
+## Current State (Dockerized — 2026-05-16)
 
 | Component | Status | Port | Notes |
 |-----------|--------|------|-------|
-| E2B (Gemma 4 E2B IT Q4_K_XL + mmproj BF16) | ✅ Running | 8093 | ROCm dGPU, `multimodal` capability confirmed |
-| E4B (CPU, zeroclaw) | ✅ Running | 8090 | **DO NOT TOUCH** — 3 persistent connections |
-| E4B (dGPU, ROCm) | ✅ Running | 8092 | --mlock --metrics, no mmproj |
-| AudioShuttle service | ✅ Running | 8765 | `--no-model` flag — model NOT wired |
-| Reaper 7.71 | ✅ Running | — | Lua watcher, 6 tracks, arrangement engine working |
-| Voice pipeline | ✅ Working | — | Alt+Space → Whisper → E2B → OSC → Reaper |
+| E4B (Docker container) | ✅ Healthy | 8102 | llama.cpp + ROCm, Gemma 4 E4B Q4_K_XL + mmproj BF16, 99 GPU layers (RX 6950 XT) |
+| AudioShuttle (Docker container) | ✅ Healthy | 8765 | `--transport=standalone --no-model`, Web UI, connects to E4B at localhost:8102 |
+| Reaper 7.71 | ✅ Running | — | Lua watcher, OSC 8000/9000, full E2E pipeline verified |
+| E2E project creation | ✅ Verified | — | `create_genre_project(rock)` → 8 tracks + 9 markers + 130 BPM + colors |
+| Multi-tool NL pipeline | ✅ Fixed | — | `translate_multi()` executes all tool calls sequentially |
+| ROCm GPU passthrough | ✅ Working | — | Multi-stage Dockerfile.e4b, HIPBLAS, gfx1030 target |
 
 ## What Exists (reuse, don't rebuild)
 

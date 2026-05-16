@@ -7,33 +7,50 @@
 # 2. Have REAPER running on the host with OSC enabled (ports 8000/9000)
 # 3. Run: docker compose up
 #
-# For GPU passthrough, uncomment the device mappings in the e4b service
+# For GPU passthrough (AMD ROCm):
+#   The e4b service is configured for AMD GPUs via /dev/kfd + /dev/dri
+#   GPU target is set via AMDGPU_TARGETS in Dockerfile.e4b (default: gfx1030)
+#   See Dockerfile.e4b for how to target other AMD GPU architectures
+#
+# For NVIDIA GPU passthrough:
+#   Uncomment the deploy.resources section below and install nvidia-container-toolkit
+#   See https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
 
 services:
   e4b:
     build:
       context: .
       dockerfile: Dockerfile.e4b
-    ports:
-      - "8102:8102"
+    network_mode: "host"
     volumes:
       - ./models:/models  # Mount GGUF files here
+    devices:
+      # AMD ROCm GPU passthrough
+      - /dev/kfd:/dev/kfd
+      # Only pass through the dGPU render node (renderD128 = RX 6950 XT)
+      # The iGPU render node (renderD129) is excluded to avoid confusion
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    group_add:
+      - "983"   # host video group GID
+      - "987"   # host render group GID
     environment:
       - MODEL_PATH=/models/gemma-4-E4B-it-UD-Q4_K_XL.gguf
       - MMPROJ_PATH=/models/gemma-4-e4b-mmproj-BF16.gguf
       - PORT=8102
       - CONTEXT_SIZE=81920
-      - N_GPU_LAYERS=0
+      - N_GPU_LAYERS=99       # Offload all layers to GPU
       - HOST=0.0.0.0
+      # AMD GPU architecture override (Navi 21 / gfx1030 for RX 6950 XT)
+      # Comment out if ROCm auto-detects correctly
+      - HSA_OVERRIDE_GFX_VERSION=10.3.0
+      # HIP device visibility — only see the dGPU
+      - HIP_VISIBLE_DEVICES=0
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8102/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    # GPU passthrough (uncomment for your GPU):
-    # devices:
-    #   - /dev/dri:/dev/dri  # Intel/AMD GPU
-    #   - /dev/kfd:/dev/kfd  # AMD ROCm
+    # For NVIDIA GPU passthrough, uncomment this block instead of the devices section above:
     # deploy:
     #   resources:
     #     reservations:
@@ -46,14 +63,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8765:8765"
+    network_mode: "host"
+    volumes:
+      # Share /tmp with host so the watcher state file is accessible
+      # The Reaper Lua watcher writes to /tmp/audioshuttle_daw_state.json
+      - /tmp:/tmp
     depends_on:
       e4b:
         condition: service_healthy
+    command: audioshuttle --transport=standalone --host=0.0.0.0 --port=8765 --no-browser --no-tray --no-model
     environment:
-      - AUDIOSHUTTLE_MODEL_API_URL=http://e4b:8102/v1/chat/completions
-      - AUDIOSHUTTLE_TRANSPORT=stdio
+      - AUDIOSHUTTLE_MODEL_API_URL=http://localhost:8102/v1/chat/completions
+      - AUDIOSHUTTLE_OSC_HOST=127.0.0.1
+      - AUDIOSHUTTLE_OSC_PORT=8000
       - AUDIOSHUTTLE_HOST=0.0.0.0
       - AUDIOSHUTTLE_PORT=8765
     env_file: .env

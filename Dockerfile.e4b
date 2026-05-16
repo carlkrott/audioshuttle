@@ -1,24 +1,107 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:22.04
+# Dockerfile.e4b — E4B domain model with ROCm GPU acceleration
+#
+# Multi-stage build:
+#   Stage 1 (builder): Install ROCm SDK, build llama.cpp with HIPBLAS
+#   Stage 2 (final):   Minimal ROCm runtime + llama-server binary
+#
+# Architecture targets: gfx1030 (AMD Radeon RX 6950 XT, Navi 21)
+# To target other GPUs, change the AMDGPU_TARGETS cmake flag below
+# (e.g., gfx1100 for RX 7900 XTX, gfx942 for MI300X, etc.)
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# ============================================================
+# Stage 1: Build llama.cpp with ROCm HIPBLAS
+# ============================================================
+FROM ubuntu:22.04 AS builder
+
+# Install base build dependencies
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
     curl \
-    libgomp1 \
+    wget \
+    gpg \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone and build llama.cpp
+# Add AMD ROCm repository (version 7.2)
+# Note: The amdgpu GPU driver repo is NOT needed — the rocm repo alone
+# provides all runtime and development packages (rocblas, hipblas, etc.)
+RUN wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor > /etc/apt/trusted.gpg.d/rocm.gpg && \
+    echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/7.2 jammy main" > /etc/apt/sources.list.d/rocm.list
+
+# Pin ROCm packages to the ROCm repo (Ubuntu's universe repo has its own
+# rocm-* packages with higher version numbers that conflict)
+RUN echo 'Package: rocm-* rocblas* hipblas* rocminfo* hip-runtime-* hsa-rocr* rocprofiler-register* roctracer* composablekernel* hipcub* hipfft* hipsparse* hipsolver* hipfort* hiptensor* rccl* rocalution* rocfft* rocprim* rocrand* hiprand* rocsolver* rocsparse* rocthrust* rocwmma* hipsparselt*' > /etc/apt/preferences.d/rocm && \
+    echo 'Pin: origin repo.radeon.com' >> /etc/apt/preferences.d/rocm && \
+    echo 'Pin-Priority: 1001' >> /etc/apt/preferences.d/rocm
+
+# Install ROCm development packages needed for HIPBLAS compilation
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    rocm-hip-runtime-dev \
+    rocblas-dev \
+    hipblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add ROCm binaries to PATH so cmake's enable_language(HIP) can find hipcc
+ENV PATH="/opt/rocm/bin:${PATH}"
+
+# Clone and build llama.cpp with HIPBLAS (ROCm GPU acceleration)
+# The ggml-hip cmake automatically finds ROCm at /opt/rocm (the default)
+# and forwards AMDGPU_TARGETS → GPU_TARGETS → CMAKE_HIP_ARCHITECTURES
 WORKDIR /app
 RUN GIT_SSL_NO_VERIFY=1 git clone --depth 1 --branch master https://github.com/ggerganov/llama.cpp.git /tmp/llama.cpp && \
     mkdir -p /tmp/llama.cpp/build && \
     cd /tmp/llama.cpp/build && \
-    cmake .. -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release && \
+    cmake .. \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_HIP=ON \
+        -DAMDGPU_TARGETS=gfx1030 && \
     cmake --build . --config Release -j$(nproc) && \
-    cp /tmp/llama.cpp/build/bin/llama-server /usr/local/bin/ && \
+    cp bin/llama-server /usr/local/bin/llama-server && \
+    cp bin/*.so* /usr/local/lib/ && \
+    ldconfig && \
     rm -rf /tmp/llama.cpp
+
+# ============================================================
+# Stage 2: Minimal runtime with ROCm + llama-server
+# ============================================================
+FROM ubuntu:22.04
+
+# Install runtime dependencies (no build tools)
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    curl \
+    libgomp1 \
+    wget \
+    gpg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add AMD ROCm repository for runtime packages
+RUN wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor > /etc/apt/trusted.gpg.d/rocm.gpg && \
+    echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/7.2 jammy main" > /etc/apt/sources.list.d/rocm.list
+
+# Same apt pinning for the final stage
+RUN echo 'Package: rocm-* rocblas* hipblas* rocminfo* hip-runtime-* hsa-rocr* rocprofiler-register* roctracer* composablekernel* hipcub* hipfft* hipsparse* hipsolver* hipfort* hiptensor* rccl* rocalution* rocfft* rocprim* rocrand* hiprand* rocsolver* rocsparse* rocthrust* rocwmma* hipsparselt*' > /etc/apt/preferences.d/rocm && \
+    echo 'Pin: origin repo.radeon.com' >> /etc/apt/preferences.d/rocm && \
+    echo 'Pin-Priority: 1001' >> /etc/apt/preferences.d/rocm
+
+# Install ROCm runtime packages only (no -dev, no LLVM compiler)
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    rocm-hip-runtime \
+    rocblas \
+    hipblas \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built llama-server and shared libraries from builder stage
+COPY --from=builder /usr/local/bin/llama-server /usr/local/bin/llama-server
+COPY --from=builder /usr/local/lib/*.so* /usr/local/lib/
+
+# Add ROCm library path to ldconfig so HIP/ROCm runtime libraries are discoverable
+RUN echo "/opt/rocm/lib" > /etc/ld.so.conf.d/rocm.conf && ldconfig
 
 # Create non-root user
 RUN groupadd -g 1000 audioshuttle && useradd -r -u 1000 -g audioshuttle audioshuttle
@@ -33,8 +116,15 @@ ENV MODEL_PATH=/models/gemma-4-E4B-it-UD-Q4_K_XL.gguf
 ENV MMPROJ_PATH=/models/gemma-4-e4b-mmproj-BF16.gguf
 ENV PORT=8102
 ENV CONTEXT_SIZE=81920
-ENV N_GPU_LAYERS=0
+ENV N_GPU_LAYERS=99
 ENV HOST=0.0.0.0
+
+# For AMD Navi 21 (RX 6950 XT / gfx1030) — override if auto-detect fails
+# See https://rocm.docs.amd.com/en/latest/conceptual/gpu-support.html
+ENV HSA_OVERRIDE_GFX_VERSION=10.3.0
+
+# HIP/ROCm runtime visibility
+ENV HIP_VISIBLE_DEVICES=0
 
 USER audioshuttle
 
@@ -42,7 +132,7 @@ USER audioshuttle
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Run llama-server
+# Run llama-server with GPU offload
 CMD ["sh", "-c", "llama-server --host $HOST --port $PORT --model $MODEL_PATH --mmproj $MMPROJ_PATH -c $CONTEXT_SIZE -ngl $N_GPU_LAYERS"]
 
 EXPOSE 8102

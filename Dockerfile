@@ -34,8 +34,8 @@ COPY --from=builder /app/src ./src
 USER audioshuttle
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')" || exit 1
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8765/')" || exit 1
 
-CMD ["audioshuttle", "--transport=stdio", "--no-browser"]
+CMD ["audioshuttle", "--transport=standalone", "--host=0.0.0.0", "--port=8765", "--no-browser", "--no-tray"]
 
 EXPOSE 8765

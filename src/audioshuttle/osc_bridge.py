@@ -499,7 +499,10 @@ class ReaperOSC:
                 address="/action",
                 error=f"Action command_id must be > 0, got {command_id}",
             )
-        return self.send_command("/action", command_id)
+        # Reaper expects action ID embedded in the address: /action/<id>
+        # (Not as a separate argument: /action, <id>)
+        address = f"/action/{command_id}"
+        return self.send_command(address)
 
     # ── Tempo and track management ──────────────────────────────
 
@@ -520,8 +523,12 @@ class ReaperOSC:
         return self.send_command("/tempo/raw", float(bpm))
 
     def insert_track(self) -> CommandResult:
-        """Insert a new track in Reaper (action 40001)."""
-        return self.send_command("/action", 40001)
+        """Insert a new track in Reaper (action 40001).
+        
+        Note: Reaper expects action ID embedded in the address path
+        as /action/<id>, not as a separate argument.
+        """
+        return self.trigger_action(40001)
 
     def rename_track(self, track: int, name: str) -> CommandResult:
         """Rename a track.
