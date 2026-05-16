@@ -104,8 +104,22 @@ class ModelServer:
             )
             return True
 
-        # Kill any orphaned process on the model port before starting.
-        # This prevents "address already in use" errors from previous runs.
+        # Before attempting to start/cleanup, probe for a pre-existing external
+        # server on the same port — if one is already responding to /health, use it.
+        if self.health_check():
+            logger.info(
+                "External model server already running at %s — using it",
+                self.base_url,
+            )
+            self.enable_external()
+            if wait:
+                # Wait for it to be fully ready
+                deadline = time.time() + timeout
+                while not self.is_running and time.time() < deadline:
+                    time.sleep(1.0)
+            return True
+
+        # No existing server found — proceed with normal startup/cleanup cycle
         self._cleanup_orphaned_process()
 
         s = self._settings

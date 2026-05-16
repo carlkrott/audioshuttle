@@ -74,6 +74,8 @@ TOOL_SCHEMAS: dict[str, dict[str, type]] = {
     # Routing
     "create_send": {"source_track": int, "dest_track": int},
     "delete_send": {"track": int, "send": int},
+    # Project management
+    "wipe_project": {},
     # Track management extras
     "set_track_input": {"track": int, "input_code": int},
     "select_track": {"track": int},
@@ -190,6 +192,9 @@ Rules:
 - "create project"/"generate project"/"new project"/"set up song" AND genre mentioned → create_genre_project (prefer over generate_project)
 - "create project"/"generate project" WITHOUT genre → create_genre_project with genre="rock" (default)
 - "add markers"/"song structure" → create_song_structure
+- MULTI-STEP PROJECT CREATION: when user asks for a new project, FIRST wipe the old one, THEN create:
+  "delete current project" / "wipe the project" / "clean slate" / "clear everything" / "start fresh" / "reset project" → wipe_project THEN create_genre_project
+  For any "create X project" command in an existing project: automatically prepend wipe_project to the tool calls.
 - Multiple commands use array with optional delay_ms
 - Track numbers start at 1. FX/send indices are 0-based.
 

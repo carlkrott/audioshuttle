@@ -1247,24 +1247,36 @@ class ReaperOSC:
         try:
             from audioshuttle.genre_profiles import (
                 get_genre, get_family, get_fx_chain, get_tempo,
-                INSTRUMENT_FAMILIES,
+                INSTRUMENT_FAMILIES, compute_instrument_grouping,
+                resolve_genre_profile, get_grouping_strategy,
+                get_track_color, get_bus_color,
+            )
+
+            # ── Step 0b: Resolve profile with hierarchy & modifiers ────────
+            resolved_profile = resolve_genre_profile(genre, custom_instruments)
+            profile = resolved_profile
+            resolved_tempo = get_tempo(genre, tempo)
+            instruments = custom_instruments or profile.get("instruments", profile["instruments"])
+            sections = custom_sections or profile["sections"]
+            effective_genre = profile.get("resolved_genre", genre)
+
+            logger.info(
+                "create_genre_project: genre=%s (strategy=%s) tempo=%d instruments=%s sections=%s",
+                effective_genre, get_grouping_strategy(effective_genre), resolved_tempo, instruments,
+                [(s["name"], s["bars"]) for s in sections],
+            )
+
+            # Compute bus groupings with dynamic grouping system
+            computed_buses = compute_instrument_grouping(
+                instruments=instruments,
+                genre=effective_genre,
+                explicit_buses=None,  # TODO: hook in user/LLM overrides via custom_instruments metadata
             )
         except ImportError:
             return CommandResult(
                 success=False, address="/project/genre",
                 error="genre_profiles module not available",
             )
-
-        profile = get_genre(genre)
-        resolved_tempo = get_tempo(genre, tempo)
-        instruments = custom_instruments or profile["instruments"]
-        sections = custom_sections or profile["sections"]
-
-        logger.info(
-            "create_genre_project: genre=%s tempo=%d instruments=%s sections=%s",
-            genre, resolved_tempo, instruments,
-            [(s["name"], s["bars"]) for s in sections],
-        )
 
         results: list[str] = []
         instrument_track_map: dict[str, int] = {}
@@ -1404,18 +1416,10 @@ class ReaperOSC:
                 instrument_track_map[inst] = track_offset + i
 
             # ── Step 4: Create bus tracks + Submaster ─────────────────
-            # Determine which families need buses (>1 instrument in family)
-            family_instrument_count: dict[str, list[str]] = {}
-            for inst in instruments:
-                try:
-                    fam = get_family(inst)
-                    family_instrument_count.setdefault(fam, []).append(inst)
-                except ValueError:
-                    pass
-
+            # Only create buses for groups with >1 instrument
             buses_to_create = [
-                fam for fam, insts in family_instrument_count.items()
-                if len(insts) > 1
+                bus_name for bus_name, bus_instruments in computed_buses.items()
+                if len(bus_instruments) > 1
             ]
 
             # Create bus tracks
@@ -1457,7 +1461,11 @@ class ReaperOSC:
             # ── Step 5: Rename tracks + load instrument plugins ───────
             for inst, track_idx in instrument_track_map.items():
                 role = inst.lower().strip()
-                self.rename_track(track_idx, role.capitalize())
+                # Title-case: "rhythm_guitar" → "Rhythm Guitar"
+                display_name = " ".join(
+                    w.capitalize() for w in role.replace("_", " ").split()
+                )
+                self.rename_track(track_idx, display_name)
                 _time.sleep(0.2)
 
                 plugin_name = self._INSTRUMENT_PLUGINS.get(role)
@@ -1475,6 +1483,43 @@ class ReaperOSC:
                             plugin_name, track_idx,
                         )
                 _time.sleep(0.2)
+
+            # ── Step 5b: Color tracks by role/bus ──────────────────────
+            # Build instrument → bus mapping from computed_buses
+            instrument_to_bus: dict[str, str] = {}
+            for bus_name, bus_instruments in computed_buses.items():
+                for inst_item in bus_instruments:
+                    instrument_to_bus[inst_item] = bus_name
+
+            # Color bus tracks first
+            for bus_name, bus_track_idx in bus_track_map.items():
+                color = get_bus_color(bus_name)
+                self.set_track_color(bus_track_idx, f"#{color}")
+                logger.info(
+                    "create_genre_project: colored %s Bus (T%d) #%s",
+                    bus_name, bus_track_idx, color,
+                )
+                _time.sleep(0.3)
+
+            # Color instrument tracks
+            for inst_item, track_idx in instrument_track_map.items():
+                bus_name = instrument_to_bus.get(inst_item)
+                color = get_track_color(inst_item, bus_name)
+                self.set_track_color(track_idx, f"#{color}")
+                logger.info(
+                    "create_genre_project: colored %s (T%d) #%s (bus=%s)",
+                    inst_item, track_idx, color, bus_name or "solo",
+                )
+                _time.sleep(0.3)
+
+            # Color submaster
+            if submaster_idx is not None:
+                sub_color = get_bus_color("Submaster")
+                self.set_track_color(submaster_idx, f"#{sub_color}")
+                logger.info("create_genre_project: colored Submaster #%s", sub_color)
+                _time.sleep(0.3)
+
+            results.append("Colors applied")
 
             # ── Step 6: Generate MIDI per section per instrument ───────
             # Reuse the inner logic from generate_project — but just the
@@ -1593,79 +1638,6 @@ class ReaperOSC:
                             logger.warning(
                                 "create_genre_project: watcher still dead, skipping remaining FX on %s",
                                 role,
-                            )
-                            break
-
-                    result = self._fx_trigger("add", track_idx, plugin_name, wait=10.0)
-                    if result.get("success"):
-                        logger.info(
-                            "create_genre_project: applied %s to track %d",
-                            plugin_name, track_idx,
-                        )
-                    else:
-                        logger.warning(
-                            "create_genre_project: failed to apply %s to track %d",
-                            plugin_name, track_idx,
-                        )
-                    _time.sleep(2.0)  # Per-FX settle time
-
-                if fx_chain:
-                    results.append(f"{role.capitalize()} FX: {len(fx_chain)} plugins")
-
-            # ── Step 8: Route instruments to buses ─────────────────────
-            # First pass: instrument → bus (where applicable)
-            for inst, track_idx in instrument_track_map.items():
-                role = inst.lower().strip()
-                try:
-                    fam = get_family(role)
-                except ValueError:
-                    fam = None
-
-                if fam and fam in bus_track_map:
-                    # Route instrument → its bus
-                    bus_idx = bus_track_map[fam]
-                    send_result = self.create_send(track_idx, bus_idx)
-                    if send_result.success:
-                        logger.info(
-                            "create_genre_project: routed %s (T%d) → %s Bus (T%d)",
-                            role, track_idx, fam.capitalize(), bus_idx,
-                        )
-                    else:
-                        logger.warning(
-                            "create_genre_project: send %s → %s failed",
-                            role, fam,
-                        )
-
-            # Second pass: bus → Submaster
-            for bus_name, bus_idx in bus_track_map.items():
-                if submaster_idx is not None:
-                    send_result = self.create_send(bus_idx, submaster_idx)
-                    if send_result.success:
-                        logger.info(
-                            "create_genre_project: routed %s Bus (T%d) → Submaster (T%d)",
-                            bus_name.capitalize(), bus_idx, submaster_idx,
-                        )
-                    else:
-                        logger.warning(
-                            "create_genre_project: send %s Bus → Submaster failed",
-                            bus_name,
-                        )
-
-            # Third pass: instruments without a bus family → direct to Submaster
-            for inst, track_idx in instrument_track_map.items():
-                role = inst.lower().strip()
-                try:
-                    fam = get_family(role)
-                except ValueError:
-                    fam = None
-
-                if not fam or fam not in bus_track_map:
-                    if submaster_idx is not None:
-                        send_result = self.create_send(track_idx, submaster_idx)
-                        if send_result.success:
-                            logger.info(
-                                "create_genre_project: routed %s (T%d) → Submaster (T%d) [direct]",
-                                role, track_idx, submaster_idx,
                             )
 
             results.append(f"Routing: {len(bus_track_map)} buses + Submaster")
@@ -3026,6 +2998,58 @@ class ReaperOSC:
         return CommandResult(
             success=False, address="/routing/send",
             error=(result or {}).get("error", "Failed to delete send"),
+        )
+
+    # ── Wipe / Clean Slate ───────────────────────────────────────────
+
+    def wipe_project(self) -> CommandResult:
+        """Delete all tracks, markers, and reset project to clean slate.
+
+        Writes a wipe trigger for the Lua watcher, which deletes all tracks,
+        markers, and resets tempo to 120 BPM. Used before creating a new
+        genre project to start from a clean state.
+        """
+        import os as _os
+        trigger_path = "/tmp/audioshuttle_wipe_trigger"
+        done_path = "/tmp/audioshuttle_wipe_done"
+
+        # Clean up any previous done file
+        try:
+            _os.remove(done_path)
+        except OSError:
+            pass
+
+        # Write wipe trigger
+        try:
+            _os.remove(trigger_path)
+        except OSError:
+            pass
+        with open(trigger_path, "w") as f:
+            f.write("wipe")
+        self._chown_to_reaper(trigger_path)
+
+        # Wait for completion (up to 5 seconds)
+        import time as _time
+        for _ in range(25):
+            _time.sleep(0.2)
+            if _os.path.exists(done_path):
+                try:
+                    with open(done_path) as f:
+                        result_data = f.read()
+                    _os.remove(done_path)
+                    logger.info("wipe_project: completed — %s", result_data[:100])
+                    return CommandResult(
+                        success=True,
+                        address="/project/wipe",
+                        reaper_feedback="Project wiped — all tracks and markers deleted",
+                    )
+                except OSError:
+                    pass
+
+        return CommandResult(
+            success=False,
+            address="/project/wipe",
+            error="Wipe timed out — watcher may be dead",
         )
 
     # ── Track input source ──────────────────────────────────────────
