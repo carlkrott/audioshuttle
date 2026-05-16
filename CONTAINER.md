@@ -39,9 +39,9 @@ AudioShuttle uses two Docker containers orchestrated by docker-compose:
 
 All configuration via environment variables (see `.env.example`):
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| AUDIOSHUTTLE_MODEL_API_URL | http://e4b:8102/... | Model API endpoint |
+| Variable | Compose Value | Description |
+|----------|---------------|-------------|
+| AUDIOSHUTTLE_MODEL_API_URL | http://e4b:8102/... | Model API endpoint (overrides default `localhost:8093`) |
 | AUDIOSHUTTLE_TRANSPORT | stdio | MCP transport mode |
 | E4B_CONTEXT_SIZE | 81920 | Model context window |
 | E4B_N_GPU_LAYERS | 0 | GPU layers (0=CPU) |

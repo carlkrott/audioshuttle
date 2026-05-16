@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir ."[web,stt]"
 FROM python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcairo2-dev \
+    libcairo2 \
     libffi8 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,9 +30,6 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app/src ./src
-COPY pyproject.toml .
-
-RUN pip install --no-cache-dir ."[web,stt]"
 
 USER audioshuttle
 

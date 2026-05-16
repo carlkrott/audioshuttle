@@ -6,7 +6,7 @@ _A Kaggle Gemma 4 Good Hackathon Project_
 
 ## Demo
 
-_[Record a screen demo and upload to YouTube/Streamable, then paste link here]_
+_Demo video coming soon — check the GitHub repo for updates_
 
 ## The Problem
 
