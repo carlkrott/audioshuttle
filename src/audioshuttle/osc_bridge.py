@@ -1247,6 +1247,7 @@ class ReaperOSC:
         try:
             from audioshuttle.genre_profiles import (
                 get_genre, get_family, get_fx_chain, get_tempo,
+                get_bus_fx_chain, SUBMASTER_FX_CHAIN,
                 INSTRUMENT_FAMILIES, compute_instrument_grouping,
                 resolve_genre_profile, get_grouping_strategy,
                 get_track_color, get_bus_color,
@@ -1652,8 +1653,87 @@ class ReaperOSC:
                                 "create_genre_project: watcher still dead, skipping remaining FX on %s",
                                 role,
                             )
+                            break  # skip remaining FX for this track
+
+                    # Add the FX plugin to the track
+                    logger.info(
+                        "create_genre_project: adding %s to track %d (%s)",
+                        plugin_name, track_idx, role,
+                    )
+                    fx_result = self._fx_trigger("add", track_idx, plugin_name, wait=4.0)
+                    if fx_result.get("success"):
+                        logger.info(
+                            "create_genre_project: %s added to track %d",
+                            plugin_name, track_idx,
+                        )
+                    else:
+                        logger.warning(
+                            "create_genre_project: failed to add %s to track %d: %s",
+                            plugin_name, track_idx, fx_result.get("error", "unknown"),
+                        )
+                    _time.sleep(0.3)
 
             results.append(f"Routing: {len(bus_track_map)} buses + Submaster")
+
+            # ── Step 8: Apply bus FX + submaster FX ────────────────────
+            for bus_name, bus_track_num in bus_track_map.items():
+                bus_chain = get_bus_fx_chain(bus_name, genre)
+                for fx_def in bus_chain:
+                    plugin_name = fx_def.get("name", "")
+                    if not plugin_name:
+                        continue
+                    if not _watcher_alive():
+                        logger.warning(
+                            "create_genre_project: watcher dead, skipping bus FX on %s",
+                            bus_name,
+                        )
+                        break
+                    logger.info(
+                        "create_genre_project: adding %s to %s bus (T%d)",
+                        plugin_name, bus_name, bus_track_num,
+                    )
+                    fx_result = self._fx_trigger("add", bus_track_num, plugin_name, wait=4.0)
+                    if fx_result.get("success"):
+                        logger.info(
+                            "create_genre_project: %s added to %s bus",
+                            plugin_name, bus_name,
+                        )
+                    else:
+                        logger.warning(
+                            "create_genre_project: failed to add %s to %s bus: %s",
+                            plugin_name, bus_name, fx_result.get("error", "unknown"),
+                        )
+                    _time.sleep(0.3)
+
+            # Apply submaster FX
+            if submaster_idx is not None:
+                for fx_def in SUBMASTER_FX_CHAIN:
+                    plugin_name = fx_def.get("name", "")
+                    if not plugin_name:
+                        continue
+                    if not _watcher_alive():
+                        logger.warning(
+                            "create_genre_project: watcher dead, skipping submaster FX",
+                        )
+                        break
+                    logger.info(
+                        "create_genre_project: adding %s to Submaster (T%d)",
+                        plugin_name, submaster_idx,
+                    )
+                    fx_result = self._fx_trigger("add", submaster_idx, plugin_name, wait=4.0)
+                    if fx_result.get("success"):
+                        logger.info(
+                            "create_genre_project: %s added to Submaster",
+                            plugin_name,
+                        )
+                    else:
+                        logger.warning(
+                            "create_genre_project: failed to add %s to Submaster: %s",
+                            plugin_name, fx_result.get("error", "unknown"),
+                        )
+                    _time.sleep(0.3)
+
+            results.append("FX: per-track + bus + submaster")
 
             # ── Step 9: Final verification ─────────────────────────────
             expected_tracks_final = pre_insertion_count + num_instruments + len(bus_track_map) + 1

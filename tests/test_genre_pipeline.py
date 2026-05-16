@@ -349,8 +349,10 @@ class TestFXChainApplication:
              patch.object(r, "create_send"), \
              patch("audioshuttle.genre_profiles.get_genre", return_value=profile) as mock_get_genre, \
              patch("audioshuttle.genre_profiles.get_family", return_value="guitars") as mock_get_family, \
-             patch("audioshuttle.genre_profiles.get_fx_chain", return_value=fx_chain) as mock_get_fx_chain, \
-             patch("audioshuttle.genre_profiles.get_tempo", return_value=120) as mock_get_tempo, \
+patch("audioshuttle.genre_profiles.get_fx_chain", return_value=fx_chain) as mock_get_fx_chain, \
+              patch("audioshuttle.genre_profiles.get_bus_fx_chain", return_value=[]) as mock_get_bus_fx_chain, \
+              patch("audioshuttle.genre_profiles.SUBMASTER_FX_CHAIN", []) as mock_submaster_fx, \
+              patch("audioshuttle.genre_profiles.get_tempo", return_value=120) as mock_get_tempo, \
              patch("audioshuttle.genre_profiles.INSTRUMENT_FAMILIES", {"guitars": {"lead_guitar"}}), \
              patch("os.path.exists", return_value=True), \
              patch("os.path.getmtime", return_value=0.0):
@@ -386,8 +388,10 @@ class TestFXChainApplication:
              patch.object(r, "create_send"), \
              patch("audioshuttle.genre_profiles.get_genre", return_value=profile) as mock_get_genre, \
              patch("audioshuttle.genre_profiles.get_family", return_value="guitars") as mock_get_family, \
-             patch("audioshuttle.genre_profiles.get_fx_chain", return_value=default_chain) as mock_get_fx_chain, \
-             patch("audioshuttle.genre_profiles.get_tempo", return_value=75) as mock_get_tempo, \
+patch("audioshuttle.genre_profiles.get_fx_chain", return_value=default_chain) as mock_get_fx_chain, \
+              patch("audioshuttle.genre_profiles.get_bus_fx_chain", return_value=[]) as mock_get_bus_fx_chain, \
+              patch("audioshuttle.genre_profiles.SUBMASTER_FX_CHAIN", []) as mock_submaster_fx, \
+              patch("audioshuttle.genre_profiles.get_tempo", return_value=75) as mock_get_tempo, \
              patch("audioshuttle.genre_profiles.INSTRUMENT_FAMILIES", {"guitars": {"lead_guitar"}}), \
              patch("os.path.exists", return_value=True), \
              patch("os.path.getmtime", return_value=0.0):

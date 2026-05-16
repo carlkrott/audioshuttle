@@ -844,3 +844,79 @@ FX_CHAINS: dict[str, dict[str, list[dict[str, str]]]] = {
         ],
     },
 }
+
+
+# ─── Bus FX Chains ────────────────────────────────────────────────────────
+# Applied to bus tracks (glue compression + EQ per instrument family).
+# Key = family name, value = genre -> FX chain (same structure as FX_CHAINS).
+
+BUS_FX_CHAINS: dict[str, dict[str, list[dict[str, str]]]] = {
+    "guitars": {
+        "_default": [
+            {"name": "ReaEQ", "type": "eq"},
+            {"name": "ReaComp", "type": "compressor"},
+        ],
+    },
+    "strings": {
+        "_default": [
+            {"name": "ReaEQ", "type": "eq"},
+            {"name": "ReaComp", "type": "compressor"},
+            {"name": "ReaVerb", "type": "reverb"},
+        ],
+    },
+    "brass": {
+        "_default": [
+            {"name": "ReaEQ", "type": "eq"},
+            {"name": "ReaComp", "type": "compressor"},
+        ],
+    },
+    "woodwinds": {
+        "_default": [
+            {"name": "ReaEQ", "type": "eq"},
+            {"name": "ReaVerb", "type": "reverb"},
+        ],
+    },
+    "vocals": {
+        "_default": [
+            {"name": "ReaEQ", "type": "eq"},
+            {"name": "ReaComp", "type": "compressor"},
+            {"name": "ReaVerb", "type": "reverb"},
+        ],
+    },
+    "synths": {
+        "_default": [
+            {"name": "ReaEQ", "type": "eq"},
+            {"name": "ReaComp", "type": "compressor"},
+        ],
+    },
+    "percussion": {
+        "_default": [
+            {"name": "ReaEQ", "type": "eq"},
+            {"name": "ReaComp", "type": "compressor"},
+        ],
+    },
+    "bass": {
+        "_default": [
+            {"name": "ReaEQ", "type": "eq"},
+            {"name": "ReaComp", "type": "compressor"},
+        ],
+    },
+}
+
+
+def get_bus_fx_chain(bus_name: str, genre: str) -> list[dict[str, str]]:
+    """Resolve FX chain for a bus by family name."""
+    family = bus_name.lower()
+    family_chains = BUS_FX_CHAINS.get(family, {})
+    genre_lower = genre.lower()
+    if genre_lower in family_chains:
+        return family_chains[genre_lower]
+    return family_chains.get("_default", [])
+
+
+SUBMASTER_FX_CHAIN: list[dict[str, str]] = [
+    {"name": "ReaEQ", "type": "eq"},
+    {"name": "ReaComp", "type": "compressor"},
+    {"name": "ReaLimit", "type": "limiter"},
+    {"name": "ReaVerb", "type": "reverb"},
+]
