@@ -10,11 +10,12 @@
 
 ## Current Position
 
-Phase: Phase 7 (Pipeline Hardening) — IN PROGRESS
-Status: Phase 6 complete but E2E testing revealed 5 pipeline bugs. Phase 7 addresses all of them: MIDI generation gaps, FX chain application never implemented, genre lump mapping, no bus/submaster FX, stray tracks. Also adds E4B modifier system for dynamic genre adaptation.
-Last activity: 2026-05-16 — Phase 7 plans created
+Phase: Phase 8 (Hackathon Submission Prep) — PLANNING
+Status: Phase 7 completed. E4B modifier system implemented and E2E verified. All 5 pipeline bugs fixed (MIDI generation, FX chains, genre lump mapping, bus/submaster FX, stray tracks). Modifier system working with plugin overrides, MIDI density modifiers, FX modifiers, and section changes. Now preparing for Kaggle submission: Docker packaging, security scrub, README, GitHub push, demo video.
 
-Progress: [▓▓▓▓▓▓▓▓▓░] 80% (planning Phase 7)
+Last activity: 2026-05-16 — Phase 8 plans created (6 plans in 4 waves)
+
+Progress: [▓▓▓▓▓▓▓▓▓▓] 100% (Phase 8 planned, ready to execute)
 
 ## Verified Working
 
@@ -23,14 +24,14 @@ Progress: [▓▓▓▓▓▓▓▓▓░] 80% (planning Phase 7)
 | Reaper 7.71 | ✅ Running | OSC on 8000/9000, Lua watcher alive with tick counter |
 | MCP server | ✅ 4 tools | daw_command, daw_state, daw_thinking, daw_interrupt |
 | Voice pipeline | ✅ Working | Alt+Space → Whisper → E2B → OSC → Reaper |
-| MIDI generator | ⚠️ Partial | Section-aware arrangement works but guitars/vocals get zero MIDI (_normalize_role bug + missing active_roles) |
+| MIDI generator | ✅ Working | Section-aware arrangement, 5+ instruments, density modifier support |
 | Multimodal E2B | ✅ Working | Port 8093, vision confirmed, streaming thinking/content |
 | Thinking overlay | ✅ Working | PyQt6 floating window, JSONL log |
 | generate_project | ✅ Working | Creates tracks + MIDI + plugins, flat layout |
-| create_genre_project | ⚠️ Partial | 9-step pipeline works but: FX chain iteration does nothing (bug), genre lumping forces metal→rock, no bus/submaster FX |
+| create_genre_project | ✅ Working | Full 9-step pipeline + E4B modifier system (plugin overrides, MIDI density, FX extras, section changes) |
 | create_send routing | ✅ Working | Full routing infrastructure for bus→submaster routing |
 | genre_profiles | ✅ Working | 11 genres, 8 instrument families, 7 FX chain types |
-| 224 unit tests | ✅ Most passing | 4 mocking-related failures in pipeline tests (non-functional) |
+| 224 unit tests | ✅ Most passing | 4 pre-existing mocking failures (non-functional, pipeline works live) |
 
 ## Key Resources
 
@@ -68,37 +69,25 @@ Progress: [▓▓▓▓▓▓▓▓▓░] 80% (planning Phase 7)
 - **State dump incomplete** — doesn't include media items or sends. Pipeline verification uses track count and marker count only.
 - **E2B vision unreliable for verification** — must verify programmatically, not trust visual assessment
 
-## Phase 6 Completion Summary
+## Phase 7 Completion Summary
 
-All 4 plans completed in 4 waves:
-- **06-01** (Wave 1): `genre_profiles.py` — 11 genres, 8 families, 7 FX chain types, 14 tests passing
-- **06-02** (Wave 2): `create_genre_project()` — 9-step pipeline, bus routing, FX chains, watcher hardening, 13/17 tests passing
-- **06-03** (Wave 3): SYSTEM_PROMPT updated with genre detection, MCP dispatch wired, 22 E2E tests passing
-- **06-04** (Wave 4, gap closure): Track index bug, marker enumeration, watcher FX timeout — all 3 fixed
-
-## Phase 7 Planning
-
-E2E testing of `create_genre_project` with live Reaper revealed 5 pipeline bugs not caught by unit tests:
-1. MIDI generation skips guitars/vocals (HIGH)
-2. FX chain Step 7 never calls _fx_trigger (HIGH)
-3. Genre lump mapping forces metal→rock (LOW)
-4. No bus/submaster FX chains (MEDIUM)
-5. Stray Track 9 (LOW)
-
-Phase 7 also adds the E4B modifier system for dynamic genre adaptation.
+Phase 7 completed all 3 plans with E2E verification:
+- **07-01** (Wave 1): Fixed `_normalize_role` stripping, genre lump mapping, `_SECTION_PROFILES` + `_ALL_ROLES` for vocals, `_remove_track` helper, Step 4b stray cleanup
+- **07-02** (Wave 2): FX chain Step 7 now calls `_fx_trigger`, `BUS_FX_CHAINS` + `SUBMASTER_FX_CHAIN` architecture, Step 8 bus/submaster FX application
+- **07-03** (Wave 3): E4B modifier system — `analyze_instruments()` in model_server, `plugin_overrides` in Step 5, `midi_modifiers` (density) in `_generate_arrangement`, `fx_modifiers` in Step 7, section_changes support. E2E verified: `create_genre_project(genre='metal', modifiers={...})` creates a complete project with all 5 instruments, bus routing, FX chains, 9 markers including Solo section, 160 BPM, 0 stray tracks.
 
 ## Session Continuity
 
 Last session: 2026-05-16
-Stopped at: Phase 7-01 executed and committed
-Next: Execute Phase 7-02 (FX chain application) — depends on 07-01 completing first
+Current: Phase 8 planning (hackathon submission prep) — 6 plans created
+Next: Execute Phase 8-01 (security scrub) through 08-06 (video demo + submit)
 
 ## Phase Progress
 
 | Phase | Plans | Status |
 |-------|-------|--------|
 | 1-4 | Complete | ✅ All phases done |
-| 5 | 7 plans | Pending |
+| 5 | 7 plans | Planned (not executed — voice pipeline partially operational) |
 | 6 | 4/4 | ✅ Complete (incl. gap closure) |
-| 7 | 1/3 | ⚠️ 07-01 complete, 07-02+03 pending |
-| 8 | 1 plan | Pending (arrangement engine research + plan exist) |
+| 7 | 3/3 | ✅ Complete (all pipeline bugs fixed, modifier system E2E verified) |
+| 8 | 6 plans | 📋 Planned (hackathon submission prep) |

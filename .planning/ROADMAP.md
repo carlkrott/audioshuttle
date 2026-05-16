@@ -62,10 +62,34 @@
 ### Phase 6: Model-Driven Project Generation ✅
 **Goal:** E2B model auto-generates complete genre-aware projects with buses, FX chains, and per-section MIDI. Pipeline with state verification between steps.
 
-**Plans:** 3 plans in 3 waves — ALL COMPLETE
+**Plans:** 4 plans in 4 waves — ALL COMPLETE (incl. gap closure)
 - [x] 06-01-PLAN.md — Genre profile database (tempo, sections, instruments, routing, FX chains for 11+ genres)
 - [x] 06-02-PLAN.md — Enhanced project pipeline (create_genre_project, bus/submaster routing, per-track FX, watcher hardening)
 - [x] 06-03-PLAN.md — System prompt + model integration (genre detection, MCP wiring, E2E tests)
+- [x] 06-04-PLAN.md — Gap closure: track index bug, marker enumeration, watcher FX timeout
+
+---
+
+### Phase 7: Pipeline Hardening ✅ (COMPLETE)
+**Goal:** Fix all pipeline bugs found in Phase 6 E2E testing: MIDI generation gaps (guitars/vocals), FX chain application (never added), genre mapping (metal→rock), bus/submaster FX, stray tracks. Add E4B modifier system for dynamic genre adaptation.
+
+**Plans:** 3 plans in 3 waves
+- [x] 07-01-PLAN.md — Fix MIDI generation (_normalize_role, active_roles, genre mapping, stray track)
+- [x] 07-02-PLAN.md — Fix FX application + add bus/submaster FX architecture
+- [x] 07-03-PLAN.md — E4B modifier system + track-aware analysis + E2E verify
+
+---
+
+### Phase 8: Hackathon Submission Prep 📋 (PLANNED)
+**Goal:** Package AudioShuttle for Kaggle Gemma 4 Good Hackathon submission — security scrub, Docker containerization, GitHub repository, README, demo video, and submission.
+
+**Plans:** 6 plans in 4 waves
+- [ ] 08-01-PLAN.md — Security scrub + .gitignore + codebase prep (Wave 1)
+- [ ] 08-02-PLAN.md — Docker container packaging (Wave 1)
+- [ ] 08-03-PLAN.md — Test Dockerized setup (Wave 2, human-verify)
+- [ ] 08-04-PLAN.md — README + LICENSE + container docs (Wave 3)
+- [ ] 08-05-PLAN.md — GitHub repository + push (Wave 3)
+- [ ] 08-06-PLAN.md — Demo video + Kaggle submission (Wave 4, human-action)
 
 ---
 
