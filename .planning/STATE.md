@@ -13,9 +13,9 @@
 Phase: Phase 8 (Hackathon Submission Prep) — PLANNING
 Status: Phase 7 completed. E4B modifier system implemented and E2E verified. All 5 pipeline bugs fixed (MIDI generation, FX chains, genre lump mapping, bus/submaster FX, stray tracks). Modifier system working with plugin overrides, MIDI density modifiers, FX modifiers, and section changes. Now preparing for Kaggle submission: Docker packaging, security scrub, README, GitHub push, demo video.
 
-Last activity: 2026-05-16 — Phase 8 plans created (6 plans in 4 waves)
+Last activity: 2026-05-16 — Phase 8 plans created
 
-Progress: [▓▓▓▓▓▓▓▓▓▓] 100% (Phase 8 planned, ready to execute)
+Progress: [▓▓▓▓▓▓▓▓▓▓] 100% (Phase 7 done, Phase 8 planned)
 
 ## Verified Working
 
@@ -55,13 +55,13 @@ Progress: [▓▓▓▓▓▓▓▓▓▓] 100% (Phase 8 planned, ready to execu
 
 ## Known Issues
 
-### Phase 7-Blocker Bugs (in progress)
+### Phase 7-Blocker Bugs (FIXED)
 
 - **MIDI generation skips guitars and vocals** — `_normalize_role` now strips compound suffixes, `_SECTION_PROFILES` + `_ALL_ROLES` now include `vocals`. FIXED in 07-01.
 - **FX chain Step 7 does nothing** — Fixed in 07-02 (Wave 2).
 - **Genre lump mapping** — Translator.py now passes exact genre names. FIXED in 07-01.
 - **No bus or submaster FX chains** — Fixed in 07-02 (Wave 2).
-- **Stray Track 9** — `_remove_track` helper + Step 4b cleanup added. PARTIALLY FIXED in 07-01.
+- **Stray Track 9** — `_remove_track` helper + Step 4b cleanup added. FIXED in 07-01.
 
 ### Other Known Issues
 

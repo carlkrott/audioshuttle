@@ -6,8 +6,9 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """AudioShuttle server configuration.
 
-    All settings can be overridden via AUDIOSHUTTLE_ prefixed env vars.
-    Example: AUDIOSHUTTLE_REAPER_PORT=9000
+    All paths default to empty strings — configure via AUDIOSHUTTLE_MODEL_PATH,
+    AUDIOSHUTTLE_MODEL_BINARY, AUDIOSHUTTLE_MODEL_MMPROJ env vars or CLI args.
+    Model file must be provided before the model server can start.
     """
 
     # Reaper OSC connection
@@ -19,10 +20,10 @@ class Settings(BaseSettings):
     model_api_url: str = "http://localhost:8093/v1/chat/completions"
     model_name: str = "gemma-4-e4b"
     model_enabled: bool = True
-    model_binary: str = "/home/korphaus/llama.cpp/build-rocm/bin/llama-server"
-    model_path: str = "/home/korphaus/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
-    model_mmproj: str = "/home/korphaus/models/llm/gemma-4-e4b-mmproj-BF16.gguf"
-    model_gpu_device: int = 0  # ROCm device index (0 = RX 6950 XT)
+    model_binary: str = ""
+    model_path: str = ""
+    model_mmproj: str = ""
+    model_gpu_device: int = 0  # GPU device index for ROCm/CUDA
     model_context_size: int = 131072  # 128k context
     model_threads: int = 8
     model_threads_batch: int = 8

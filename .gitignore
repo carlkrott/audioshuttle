@@ -1,2 +1,51 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+.venv*/
+venv/
+env/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.report
+*.log
+
+# Models (large GGUF files that must be downloaded separately)
+*.gguf
+
+# Reaper
+Media/
+*.RPP
+!example.RPP
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Planning (internal project docs, personal references)
+.planning/
+
+# Config overrides
+opencode.json

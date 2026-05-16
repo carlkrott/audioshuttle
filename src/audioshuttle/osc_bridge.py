@@ -650,7 +650,7 @@ class ReaperOSC:
         )
 
         # Import MIDI into Reaper via __startup.lua watcher.
-        # The watcher runs inside Reaper (korphaus user) and polls for a trigger
+        # The watcher runs inside Reaper and polls for a trigger
         # file every 200ms. When it finds the trigger, it reads the MIDI file
         # and calls reaper.InsertMedia().
         #
@@ -667,7 +667,7 @@ class ReaperOSC:
             pass
 
         # Create trigger file owned by Reaper's user (needed for sticky-bit /tmp)
-        # The __startup.lua watcher runs as korphaus and needs to os.remove() it
+        # The __startup.lua watcher runs as the Reaper user and needs to os.remove() it
         # Trigger format: "import" or "import:track:N:role" for targeting a specific track
         trigger_content = "import"
         if target_track is not None:
@@ -1227,6 +1227,7 @@ class ReaperOSC:
         scale: str = "major",
         custom_instruments: list[str] | None = None,
         custom_sections: list[dict] | None = None,
+        modifiers: dict | None = None,
     ) -> CommandResult:
         """Create a complete genre-aware Reaper project with bus routing and FX chains.
 
@@ -1239,6 +1240,8 @@ class ReaperOSC:
             scale: Scale type (major, minor, pentatonic, blues).
             custom_instruments: Override instruments list. None = use genre default.
             custom_sections: Override section list. None = use genre default.
+            modifiers: E4B-generated parameter overrides. None = no modifier adjustments.
+                Supported keys: plugin_overrides, midi_modifiers, fx_modifiers, section_changes.
         """
         import time as _time
         import json as _json
@@ -1357,6 +1360,43 @@ class ReaperOSC:
             except Exception as e:
                 logger.warning("%s: verification failed: %s", description, e)
                 return False
+
+        # ── Step 0.5: Apply E4B modifier overrides (if any) ──────────────
+        if modifiers:
+            plugin_overrides = modifiers.get("plugin_overrides", {}) or {}
+            if plugin_overrides:
+                logger.info(
+                    "create_genre_project: applying %d plugin overrides",
+                    len(plugin_overrides),
+                )
+                self._plugin_overrides = plugin_overrides
+
+            midi_mods = modifiers.get("midi_modifiers", {}) or {}
+            if midi_mods:
+                logger.info(
+                    "create_genre_project: applying %d MIDI modifiers",
+                    len(midi_mods),
+                )
+                self._midi_modifiers = midi_mods
+
+            fx_mods = modifiers.get("fx_modifiers", {}) or {}
+            if fx_mods:
+                logger.info(
+                    "create_genre_project: applying %d FX modifiers",
+                    len(fx_mods),
+                )
+                self._fx_modifiers = fx_mods
+
+            section_changes = modifiers.get("section_changes", []) or []
+            if section_changes:
+                logger.info(
+                    "create_genre_project: applying %d section changes",
+                    len(section_changes),
+                )
+        else:
+            self._plugin_overrides = {}
+            self._midi_modifiers = {}
+            self._fx_modifiers = {}
 
         try:
             # ── Step 1: Set tempo ──────────────────────────────────────
@@ -1482,7 +1522,9 @@ class ReaperOSC:
                 self.rename_track(track_idx, display_name)
                 _time.sleep(0.2)
 
-                plugin_name = self._INSTRUMENT_PLUGINS.get(role)
+                # Check for E4B plugin override first
+                override_plugin = getattr(self, '_plugin_overrides', {}).get(role, None)
+                plugin_name = override_plugin or self._INSTRUMENT_PLUGINS.get(role)
                 if plugin_name:
                     _time.sleep(0.3)
                     fx_result = self._fx_trigger("add", track_idx, plugin_name, wait=4.0)
@@ -1671,6 +1713,18 @@ class ReaperOSC:
                             "create_genre_project: failed to add %s to track %d: %s",
                             plugin_name, track_idx, fx_result.get("error", "unknown"),
                         )
+                    _time.sleep(0.3)
+
+                # Apply E4B FX modifiers if any
+                fx_mods_for_role = getattr(self, "_fx_modifiers", {}).get(role, []) or []
+                for extra_fx in fx_mods_for_role:
+                    if not _watcher_alive():
+                        break
+                    logger.info(
+                        "create_genre_project: [modifier] adding extra FX %s to track %d",
+                        extra_fx, track_idx,
+                    )
+                    self._fx_trigger("add", track_idx, extra_fx, wait=4.0)
                     _time.sleep(0.3)
 
             results.append(f"Routing: {len(bus_track_map)} buses + Submaster")
@@ -2102,6 +2156,13 @@ class ReaperOSC:
 
             density = profile["density"]
             vel_lo, vel_hi = profile["vel_range"]
+
+            # Apply E4B MIDI density modifier if available
+            midi_mods = getattr(self, "_midi_modifiers", {})
+            role_mod = midi_mods.get(role, {})
+            if isinstance(role_mod, dict):
+                density_mod = role_mod.get("density_mod", 0.0)
+                density = max(0.1, min(1.0, density + density_mod))
 
             self._generate_section_pattern(
                 midi, mtrack, role, scale_notes,
@@ -2941,7 +3002,7 @@ class ReaperOSC:
         """Chown a file to the Reaper user (found via /proc).
 
         Skips sudo wrappers (UID 0) to find the actual Reaper process
-        running as the target user (e.g. korphaus).
+        running as the target Reaper user.
         """
         import glob as _glob
         for pid_dir in _glob.glob("/proc/[0-9]*"):
@@ -2965,7 +3026,7 @@ class ReaperOSC:
         """Generic Lua watcher trigger: write content, wait for JSON result.
 
         Uses remove-then-create to avoid PermissionError on tmpfs when
-        the trigger file is owned by a different user (Reaper/korphaus)
+        the trigger file is owned by a different user (Reaper process)
         and Python runs as root.
         """
         import json as _json

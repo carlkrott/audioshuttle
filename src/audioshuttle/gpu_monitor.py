@@ -7,7 +7,7 @@ def get_gpu_vram(card_index: int = 1) -> dict[str, float | int]:
     """Read VRAM usage from AMD GPU sysfs.
 
     Args:
-        card_index: DRM card index (0=iGPU, 1=discrete GPU on this system).
+        card_index: DRM card index (typically 0=iGPU, 1=discrete GPU).
     """
     base = f"/sys/class/drm/card{card_index}/device"
     try:
