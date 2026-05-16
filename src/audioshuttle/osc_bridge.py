@@ -1458,6 +1458,19 @@ class ReaperOSC:
             _verify_project_state(expected_total, len(sections), "Step 4: buses")
             results.append(f"Buses: {list(bus_track_map.keys())}")
 
+            # ── Step 4b: Remove stray tracks (unnamed extras beyond expected) ──
+            self.refresh_state(wait=0.2)
+            actual_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
+            expected_count = pre_insertion_count + num_instruments + len(bus_track_map) + 1
+            if actual_count > expected_count:
+                logger.warning(
+                    "create_genre_project: %d extra track(s) found (expected %d, got %d)",
+                    actual_count - expected_count, expected_count, actual_count,
+                )
+                for t in range(actual_count, expected_count, -1):
+                    self._remove_track(t)
+                    _time.sleep(0.25)
+
             # ── Step 5: Rename tracks + load instrument plugins ───────
             for inst, track_idx in instrument_track_map.items():
                 role = inst.lower().strip()
@@ -2520,6 +2533,8 @@ class ReaperOSC:
         "fx": "ReaSynth",
         "riser": "ReaSynth",
         "sub": "ReaSynth",
+        "rhythm_guitar": "ReaSynth",
+        "lead_guitar": "ReaSynth",
     }
 
     # All roles that can appear in arrangements
@@ -2528,6 +2543,7 @@ class ReaperOSC:
         "bass", "melody", "lead", "line",
         "chords", "keys", "key", "pad", "synth",
         "strings", "string", "arp", "fx", "riser", "sub",
+        "vocals",
     })
 
     # Section density profiles — density controls note density & subdivision
@@ -2544,7 +2560,7 @@ class ReaperOSC:
             "vel_range": (60, 100),
             "active_roles": {
                 "drums", "drum", "beat", "kick", "snare", "rhythm",
-                "bass", "keys", "key", "melody", "lead",
+                "bass", "keys", "key", "melody", "lead", "vocals",
             },
         },
         "chorus": {
@@ -2555,7 +2571,7 @@ class ReaperOSC:
         "bridge": {
             "density": 0.5,
             "vel_range": (50, 90),
-            "active_roles": {"keys", "key", "pad", "strings", "string", "arp"},
+            "active_roles": {"keys", "key", "pad", "strings", "string", "arp", "vocals"},
         },
         "breakdown": {
             "density": 0.2,
@@ -2575,7 +2591,7 @@ class ReaperOSC:
         "outro": {
             "density": 0.4,
             "vel_range": (40, 80),
-            "active_roles": {"drums", "drum", "beat", "kick", "bass", "keys", "key", "pad"},
+            "active_roles": {"drums", "drum", "beat", "kick", "bass", "keys", "key", "pad", "vocals"},
         },
     }
 
@@ -2594,9 +2610,12 @@ class ReaperOSC:
     @staticmethod
     def _normalize_role(role: str) -> str:
         """Normalize instrument role for matching.
-        'Lead Synth' → 'lead', 'FX Riser' → 'fx', 'Snare+Hat' → 'snare'
+        'Lead Guitar'/'lead_guitar' → 'lead', 'FX Riser' → 'fx', 'Snare+Hat' → 'snare'
         """
-        return role.lower().strip().split()[0].split("+")[0].split("-")[0]
+        normalized = role.lower().strip().split()[0].split("+")[0].split("-")[0]
+        # Also strip underscore suffixes: 'rhythm_guitar' → 'rhythm', 'pad_synth' → 'pad'
+        normalized = normalized.split("_")[0]
+        return normalized
 
     def _fx_trigger(
         self, command: str, track: int, *args: str, wait: float = 1.0,
@@ -2618,6 +2637,24 @@ class ReaperOSC:
             wait=wait,
         )
         return result or {"success": False, "error": "timeout waiting for FX result"}
+
+    def _remove_track(self, track_num: int) -> CommandResult:
+        """Remove a track by number via OSC action.
+
+        Args:
+            track_num: Track number (1-based).
+        """
+        if track_num < 1:
+            return CommandResult(
+                success=False,
+                address="/track/remove",
+                error=f"Invalid track_num={track_num} (must be >= 1)",
+            )
+        # First select the track
+        self.send_command(f"/track/{track_num}/select", 1.0)
+        _time.sleep(0.15)
+        # Then run delete action (40005 = Track: Remove selected tracks)
+        return self.trigger_action(40005)
 
     def load_plugin(
         self, track: int, plugin_name: str,

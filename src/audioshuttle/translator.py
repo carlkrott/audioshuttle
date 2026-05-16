@@ -132,17 +132,16 @@ Transport:
    Creates a complete genre-aware project with auto-routing, buses, FX chains per track, and per-section MIDI.
    PREFER this over generate_project when user mentions a genre or wants a complete project setup.
 
-   Genre detection — map user request to one of these genres:
-   - "rock", "metal", "punk", "grunge", "alternative" → genre="rock"
-   - "pop", "dance", "edm", "electro", "house", "techno", "trance", "dubstep" → genre="electronic"
-   - "hip hop", "rap", "trap", "hiphop", "rnb" → genre="hiphop"
-   - "jazz", "swing", "bebop", "fusion" → genre="jazz"
-   - "classical", "orchestral", "symphony", "film score" → genre="orchestral"
-   - "ambient", "atmospheric", "drone", "soundscape" → genre="ambient"
-   - "funk", "soul" → genre="funk"
-   - "blues", "delta blues" → genre="blues"
-   - "reggae", "dub", "ska" → genre="reggae"
-   - If NO genre detected, use genre="rock" as default
+   Genre detection — pass the exact genre name the user said:
+   Available genres: rock, metal, pop, electronic, hiphop, jazz, orchestral,
+   ambient, funk, blues, reggae, worship, country, latin, soul, punk
+   - "make a metal track" → genre="metal"  (NOT rock)
+   - "create a pop song" → genre="pop"     (NOT rock — pop has its own profile)
+   - "EDM banger" → genre="electronic"
+   - If user says a multi-word genre like "hip hop" → genre="hiphop"
+   - If user mentions a music style not in the list, use genre="rock" as default
+   - Do NOT guess — use the exact genre name. Each genre has a unique profile
+     with custom instruments, sections, tempo, and FX chains.
 
    Tempo detection — extract BPM if user specifies:
    - "at 140 bpm", "140 bpm", "tempo 140" → tempo=140
@@ -206,7 +205,7 @@ Examples:
    "make me a jazz track at 140 bpm" → {"tool":"create_genre_project","args":{"genre":"jazz","tempo":140}}
    "create an EDM banger" → {"tool":"create_genre_project","args":{"genre":"electronic"}}
    "new project with drums and bass" → {"tool":"create_genre_project","args":{"genre":"rock","custom_instruments":["drums","bass"]}}
-   "create a pop song with piano and strings at 100 bpm" → {"tool":"create_genre_project","args":{"genre":"rock","tempo":100,"custom_instruments":["keys","strings"]}}
+   "create a pop song with piano and strings at 100 bpm" → {"tool":"create_genre_project","args":{"genre":"pop","tempo":100,"custom_instruments":["keys","strings"]}}
    "create project in D minor with drums bass melody, verse chorus verse" → {"tool":"generate_project","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16}],"instruments":["drums","bass","melody"],"key":"D","scale":"minor","bpm":120}}
   "set tempo 140 and play" → [{"tool":"set_tempo","args":{"bpm":140}},{"tool":"transport_control","args":{"action":"play"}}]
   "more reverb on track 2" → {"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.8}}

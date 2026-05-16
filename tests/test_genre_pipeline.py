@@ -679,5 +679,39 @@ class TestPipelineOrdering:
             assert refresh_count[0] >= 2
 
 
+class TestNormalizeRole:
+    """Test _normalize_role handles compound and simple names."""
+
+    def test_simple_role(self):
+        """'drums' → 'drums'"""
+        from audioshuttle.osc_bridge import ReaperOSC
+        assert ReaperOSC._normalize_role("drums") == "drums"
+
+    def test_compound_guitar(self):
+        """'rhythm_guitar' → 'rhythm'"""
+        from audioshuttle.osc_bridge import ReaperOSC
+        assert ReaperOSC._normalize_role("rhythm_guitar") == "rhythm"
+
+    def test_compound_lead_guitar(self):
+        """'lead_guitar' → 'lead'"""
+        from audioshuttle.osc_bridge import ReaperOSC
+        assert ReaperOSC._normalize_role("lead_guitar") == "lead"
+
+    def test_title_case_spaces(self):
+        """'Lead Guitar' → 'lead'"""
+        from audioshuttle.osc_bridge import ReaperOSC
+        assert ReaperOSC._normalize_role("Lead Guitar") == "lead"
+
+    def test_with_plus(self):
+        """'Snare+Hat' → 'snare'"""
+        from audioshuttle.osc_bridge import ReaperOSC
+        assert ReaperOSC._normalize_role("Snare+Hat") == "snare"
+
+    def test_pad_synth(self):
+        """'pad_synth' → 'pad'"""
+        from audioshuttle.osc_bridge import ReaperOSC
+        assert ReaperOSC._normalize_role("pad_synth") == "pad"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
