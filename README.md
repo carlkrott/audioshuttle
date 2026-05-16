@@ -14,7 +14,7 @@ Professional audio production has a steep learning curve. DAWs require mouse-and
 
 ## The Gemma Solution
 
-Gemma 4 E4B changes this. With 81K context, tool-use capabilities, and vision understanding, E2B can:
+Gemma 4 E4B changes this. With 81K context, tool-use capabilities, and vision understanding, E4B can:
 - **Translate** natural language into precise DAW commands
 - **Generate** genre-appropriate MIDI patterns with section awareness
 - **Adapt** arrangements dynamically (longer verses, more solos, custom instruments)
