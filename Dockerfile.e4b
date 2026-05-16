@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+FROM ubuntu:22.04
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone and build llama.cpp
+WORKDIR /app
+RUN git clone --depth 1 --branch master https://github.com/ggerganov/llama.cpp.git /tmp/llama.cpp && \
+    mkdir -p /tmp/llama.cpp/build && \
+    cd /tmp/llama.cpp/build && \
+    cmake .. -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build . --config Release -j$(nproc) && \
+    cp /tmp/llama.cpp/build/bin/llama-server /usr/local/bin/ && \
+    rm -rf /tmp/llama.cpp
+
+# Create non-root user
+RUN groupadd -g 1000 audioshuttle && useradd -r -u 1000 -g audioshuttle audioshuttle
+
+WORKDIR /app
+
+# Volume for model GGUF files
+VOLUME ["/models"]
+
+# Default environment
+ENV MODEL_PATH=/models/gemma-4-E4B-it-UD-Q4_K_XL.gguf
+ENV MMPROJ_PATH=/models/gemma-4-e4b-mmproj-BF16.gguf
+ENV PORT=8102
+ENV CONTEXT_SIZE=81920
+ENV N_GPU_LAYERS=0
+ENV HOST=0.0.0.0
+
+USER audioshuttle
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Run llama-server
+CMD ["sh", "-c", "llama-server --host $HOST --port $PORT --model $MODEL_PATH --mmproj $MMPROJ_PATH -c $CONTEXT_SIZE -ngl $N_GPU_LAYERS"]
+
+EXPOSE 8102

@@ -1,0 +1,61 @@
+# AudioShuttle — AI-agnostic DAW control via MCP
+#
+# Prerequisites:
+# 1. Download model GGUF files and place in ./models/
+#    - gemma-4-E4B-it-UD-Q4_K_XL.gguf (main model, ~12GB)
+#    - gemma-4-e4b-mmproj-BF16.gguf (vision projection)
+# 2. Have REAPER running on the host with OSC enabled (ports 8000/9000)
+# 3. Run: docker compose up
+#
+# For GPU passthrough, uncomment the device mappings in the e4b service
+
+services:
+  e4b:
+    build:
+      context: .
+      dockerfile: Dockerfile.e4b
+    ports:
+      - "8102:8102"
+    volumes:
+      - ./models:/models  # Mount GGUF files here
+    environment:
+      - MODEL_PATH=/models/gemma-4-E4B-it-UD-Q4_K_XL.gguf
+      - MMPROJ_PATH=/models/gemma-4-e4b-mmproj-BF16.gguf
+      - PORT=8102
+      - CONTEXT_SIZE=81920
+      - N_GPU_LAYERS=0
+      - HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8102/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # GPU passthrough (uncomment for your GPU):
+    # devices:
+    #   - /dev/dri:/dev/dri  # Intel/AMD GPU
+    #   - /dev/kfd:/dev/kfd  # AMD ROCm
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  audioshuttle:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8765:8765"
+    depends_on:
+      e4b:
+        condition: service_healthy
+    environment:
+      - AUDIOSHUTTLE_MODEL_API_URL=http://e4b:8102/v1/chat/completions
+      - AUDIOSHUTTLE_TRANSPORT=stdio
+      - AUDIOSHUTTLE_HOST=0.0.0.0
+      - AUDIOSHUTTLE_PORT=8765
+    env_file: .env
+    stdin_open: true
+    tty: true
