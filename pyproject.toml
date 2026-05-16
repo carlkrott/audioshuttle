@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
+    "MIDIUtil>=1.2",
 ]
 
 [project.optional-dependencies]
