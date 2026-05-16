@@ -16,10 +16,10 @@ class TestModelServerConfig:
         s = Settings()
         assert s.model_enabled is True
         assert s.model_gpu_device == 0
-        assert s.model_name == "gemma-4-e2b"
-        assert s.model_timeout == 60
+        assert s.model_name == "gemma-4-e4b"
+        assert s.model_timeout == 120
         assert s.model_gpu_layers == 99
-        assert s.model_context_size == 8192
+        assert s.model_context_size == 131072
 
     def test_custom_model_url(self):
         s = Settings(model_api_url="http://myhost:9999/v1/chat/completions")
@@ -64,7 +64,9 @@ class TestModelServerLifecycle:
 class TestModelServerHealthCheck:
     """Test health check logic."""
 
-    def test_health_check_fails_when_not_running(self):
+    @patch("audioshuttle.model_server.httpx.get")
+    def test_health_check_fails_when_not_running(self, mock_get):
+        mock_get.side_effect = Exception("Connection refused")
         ms = ModelServer()
         assert ms.health_check() is False
 
@@ -91,7 +93,9 @@ class TestModelServerHealthCheck:
 class TestModelServerChat:
     """Test chat completion requests."""
 
-    def test_chat_returns_none_when_not_running(self):
+    @patch("audioshuttle.model_server.httpx.post")
+    def test_chat_returns_none_when_not_running(self, mock_post):
+        mock_post.side_effect = Exception("Connection refused")
         ms = ModelServer()
         result = ms.chat([{"role": "user", "content": "hello"}])
         assert result is None

@@ -58,9 +58,15 @@ class STTEngine:
         self._model_lock = threading.Lock()
         self._initialized = True
 
-    @property
-    def available(self) -> bool:
+    @classmethod
+    def available(cls) -> bool:
         """True if faster_whisper is installed and importable."""
+        return _WHISPER_AVAILABLE
+
+    # Alias for instance-level check (same value)
+    @property
+    def is_available(self) -> bool:
+        """Instance-level alias for available()."""
         return _WHISPER_AVAILABLE
 
     def _load_model(self) -> WhisperModel:

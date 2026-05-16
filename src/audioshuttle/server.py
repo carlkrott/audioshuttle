@@ -189,6 +189,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
                 custom_instruments=args.get("custom_instruments"),
                 custom_sections=args.get("custom_sections"),
             ),
+            "wipe_project": lambda: bridge.wipe_project(),
             "goto_marker": lambda: bridge.goto_marker(int(args["marker"])),
             "set_marker_name": lambda: bridge.set_marker_name(
                 int(args["marker"]), str(args["name"])
@@ -222,27 +223,21 @@ def create_server(settings: Settings | None = None) -> FastMCP:
 
     # ── THE Tool: daw_command ───────────────────────────────────
 
-    @mcp.tool()
-    def daw_command(command: str) -> dict[str, Any]:
+    @mcp.tool(timeout=600.0)
+    def daw_command(command: str, ctx = None) -> dict[str, Any]:
         """Execute a natural language DAW command via domain expert model.
 
         Understands compound commands, track names, and musical terms.
         Translates via Gemma E2B model, then executes on the connected DAW.
-
-        Examples:
-            "mute the drums and solo the guitar"
-            "set tempo to 140"
-            "add reverb on track 3"
-            "create a project in C major with drums bass melody keys, 16-bar verse 8-bar chorus"
-            "rename track 5 to bass and arm it"
-            "play"
-            "undo"
-            "go to marker 2"
-
-        Args:
-            command: Natural language DAW command. Can be multiple actions.
         """
-        # Get live DAW state for context
+        def _progress(msg: str) -> None:
+            if ctx is not None and hasattr(ctx, 'report_progress'):
+                try:
+                    ctx.report_progress(progress=0, total=1, message=msg)
+                except Exception:
+                    pass
+
+        _progress("Reading DAW state...")
         state = bridge.state
         if hasattr(bridge, "refresh_state"):
             try:
@@ -250,92 +245,71 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             except Exception:
                 pass
 
-        # Translate natural language → structured tool calls
+        if translator._model_server is None:
+            try:
+                import httpx
+                health_url = settings.model_api_url.replace("/v1/chat/completions", "/health")
+                resp = httpx.get(health_url, timeout=2.0)
+                if resp.status_code == 200:
+                    from audioshuttle.model_server import ModelServer
+                    ms = ModelServer(settings)
+                    ms.enable_external()
+                    if ms.is_running:
+                        translator._model_server = ms
+                        bridge._model_server = ms
+            except Exception:
+                pass
+
+        _progress("Translating via E4B model...")
         results = translator.translate_multi(command, state)
-
         if not results:
-            return {
-                "success": False,
-                "error": "Could not translate command",
-                "command": command,
-            }
+            return {"success": False, "error": "Could not translate command", "command": command}
 
-        # Execute each translated tool call
-        executed = []
-        errors = []
-        for r in results:
+        executed, errors = [], []
+        total = len(results)
+        for i, r in enumerate(results):
+            _progress(f"Step {i+1}/{total}: {r.tool}...")
             if not r.success:
                 errors.append(f"{r.tool}: {r.error}")
                 continue
-
-            tool_name = r.tool
-            tool_args = r.args
-
-            # Discovery tools — return state instead of executing
-            if tool_name in ("list_tracks", "get_transport",
-                             "get_daw_state", "get_track_count"):
-                executed.append({
-                    "tool": tool_name,
-                    "action": "query",
-                    "note": "State query — use daw_state for details",
-                })
+            tool_name, tool_args = r.tool, r.args
+            if tool_name in ("list_tracks", "get_transport", "get_daw_state", "get_track_count"):
+                executed.append({"tool": tool_name, "action": "query", "note": "State query"})
                 continue
-
             cmd_result = _execute_tool(tool_name, tool_args)
-
             if cmd_result is None:
                 errors.append(f"Unknown tool: {tool_name}")
                 continue
-
-            # Emit tool result to thinking stream
             try:
                 from audioshuttle.thinking_stream import ThinkingStream
                 ts = ThinkingStream.instance()
                 ok = cmd_result.success if hasattr(cmd_result, "success") else True
-                detail = ""
-                if hasattr(cmd_result, "reaper_feedback") and cmd_result.reaper_feedback:
-                    detail = cmd_result.reaper_feedback[:80]
-                elif hasattr(cmd_result, "error") and cmd_result.error:
-                    detail = cmd_result.error[:80]
+                detail = (cmd_result.reaper_feedback or cmd_result.error or "")[:80] if hasattr(cmd_result, "reaper_feedback") else ""
                 ts.emit_tool_result(tool_name, ok, detail)
             except Exception:
                 pass
-
             executed.append({
-                "tool": tool_name,
-                "args": tool_args,
+                "tool": tool_name, "args": tool_args,
                 "success": cmd_result.success if hasattr(cmd_result, "success") else True,
-                "detail": (
-                    cmd_result.reaper_feedback
-                    if hasattr(cmd_result, "reaper_feedback") and cmd_result.reaper_feedback
-                    else None
-                ),
+                "detail": cmd_result.reaper_feedback if hasattr(cmd_result, "reaper_feedback") and cmd_result.reaper_feedback else None,
                 "error": cmd_result.error if hasattr(cmd_result, "error") and cmd_result.error else None,
             })
 
-        # Build summary
-        success_count = sum(1 for e in executed if e.get("success", True))
-        total = len(executed)
-
+        _progress("Building summary...")
         summary_parts = []
         for e in executed:
             if e.get("action") == "query":
                 continue
             if e.get("success"):
-                detail = e.get("detail", "")
-                if detail:
-                    summary_parts.append(detail)
-                else:
-                    summary_parts.append(f"✓ {e['tool']}({e.get('args', {})})")
+                d = e.get("detail", "")
+                summary_parts.append(d if d else f"OK {e['tool']}({e.get('args', {})})")
             else:
-                summary_parts.append(f"✗ {e['tool']}: {e.get('error', 'failed')}")
+                summary_parts.append(f"FAIL {e['tool']}: {e.get('error', 'failed')}")
 
         return {
-            "success": total > 0 and len(errors) == 0,
-            "command": command,
-            "executed": total,
-            "results": executed,
-            "errors": errors,
+            "success": len(executed) > 0 and len(errors) == 0,
+            "command": command, "executed": len(executed),
+            "results": executed, "errors": errors,
             "summary": "\n".join(summary_parts) if summary_parts else "No actions taken",
         }
 
@@ -412,6 +386,40 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             "tracks": tracks,
             "transport": transport,
         }
+
+    # ── Speech-to-Text Tool ───────────────────────────────────────
+
+    @mcp.tool()
+    def transcribe_audio(audio_path: str) -> dict[str, Any]:
+        """Transcribe an audio file to text using Whisper.
+
+        Requires audioshuttle[stt] optional dependency.
+        Returns transcribed text that can be fed to daw_command for voice control.
+
+        Args:
+            audio_path: Path to the audio file (WAV, MP3, OGG, etc.).
+        """
+        from audioshuttle.stt import STTEngine
+
+        if not STTEngine.available():
+            return {
+                "success": False,
+                "error": (
+                    "faster-whisper not installed. "
+                    "Install with: pip install audioshuttle[stt]"
+                ),
+            }
+
+        try:
+            engine = STTEngine(
+                model_size=settings.stt_model_size,
+                device=settings.stt_device,
+                compute_type=settings.stt_compute_type,
+            )
+            text = engine.transcribe(audio_path)
+            return {"success": True, "text": text}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     # ── Thinking Stream Tools ──────────────────────────────────
 
