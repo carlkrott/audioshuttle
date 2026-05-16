@@ -425,6 +425,96 @@ class ModelServer:
         """
         yield from self.chat_streaming(messages, temperature, max_tokens)
 
+    def analyze_instruments(
+        self,
+        genre: str,
+        instruments: list[str],
+        sections: list[dict[str, str | int]],
+        user_request: str,
+        tempo: int | None = None,
+        key: str | None = None,
+        scale: str | None = None,
+        timeout: float = 30.0,
+    ) -> dict | None:
+        """Ask E4B to analyze instruments and recommend modifiers for a genre project.
+
+        Returns a dict with:
+            - plugin_overrides: dict[str, str]  # role -> custom plugin name
+            - midi_modifiers: dict[str, dict]   # role -> {density_mod: float, complexity: str}
+            - section_changes: list[dict]       # additional sections or section mods
+            - fx_modifiers: dict[str, list]      # role -> additional FX to add
+            - mix_notes: str                     # general mix guidance
+        Returns None if model is unavailable or times out.
+        """
+        if not self.health_check():
+            logger.warning("analyze_instruments: model not available, skipping analysis")
+            return None
+
+        sections_str = ", ".join(
+            s["name"] + " (" + str(s["bars"]) + " bars)" for s in sections
+        )
+        prompt = f"""You are a professional music producer analyzing a {genre} music project.
+
+Genre: {genre}
+Instruments: {", ".join(instruments)}
+Sections: {sections_str}
+Tempo: {tempo or 'default'}
+Key: {key or 'default'}
+Scale: {scale or 'default'}
+User request: {user_request}
+
+For each instrument, recommend:
+1. A suitable VST plugin name (ReaSynth, ReaSynDr are defaults — suggest alternatives from: ReaSamplOmatic5000, JS: Delay, JS: Distortion, JS: Chorus, JS: MIDI Arpeggiator only)
+2. MIDI density modifier (-0.2 to +0.2, where 0 = genre default)
+3. Any additional FX plugins beyond the standard ReaEQ+ReaComp chain
+4. Whether this instrument should play in intro, verse, chorus, bridge, outro
+
+Also recommend any structural changes (longer verses, extra chorus, solo section).
+
+Return your analysis as a JSON object with this structure:
+{{
+  "plugin_overrides": {{
+    "rhythm_guitar": "ReaSynth",
+    "lead_guitar": "JS: Distortion"
+  }},
+  "midi_modifiers": {{
+    "drums": {{"density_mod": 0.0, "complexity": "standard"}},
+    "lead_guitar": {{"density_mod": 0.2, "complexity": "lead_melody"}},
+    "rhythm_guitar": {{"density_mod": 0.1, "complexity": "chord_strum"}}
+  }},
+  "section_changes": [],
+  "fx_modifiers": {{
+    "lead_guitar": ["JS: Delay"]
+  }},
+  "mix_notes": "Roll off bass below 80Hz on guitars. Add presence boost around 3kHz on lead."
+}}
+
+Only respond with the JSON. No markdown, no explanation.
+"""
+        try:
+            response = self.chat(prompt, timeout=timeout)
+            if not response:
+                return None
+            text = response.strip()
+            # Strip markdown code fences if present
+            if text.startswith("```"):
+                parts = text.split("```")
+                if len(parts) >= 3:
+                    text = parts[1]
+                    if text.startswith("json"):
+                        text = text[4:]
+                text = text.strip()
+            import json as _json
+            result = _json.loads(text)
+            logger.info(
+                "analyze_instruments: received modifier recommendations for %d instruments",
+                len(result.get("plugin_overrides", {})),
+            )
+            return result
+        except Exception as e:
+            logger.warning("analyze_instruments: failed to parse response: %s", e)
+            return None
+
     # ── Content Helpers ────────────────────────────────────────
 
     @staticmethod

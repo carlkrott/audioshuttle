@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Clone and build llama.cpp
 WORKDIR /app
-RUN git clone --depth 1 --branch master https://github.com/ggerganov/llama.cpp.git /tmp/llama.cpp && \
+RUN GIT_SSL_NO_VERIFY=1 git clone --depth 1 --branch master https://github.com/ggerganov/llama.cpp.git /tmp/llama.cpp && \
     mkdir -p /tmp/llama.cpp/build && \
     cd /tmp/llama.cpp/build && \
     cmake .. -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release && \

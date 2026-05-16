@@ -128,7 +128,7 @@ Transport:
 - generate_project: {"sections": [{"name": str, "bars": int}], "instruments": ["drums","bass","melody","keys","strings","lead","pad","arp","fx","sub"], "key": str, "scale": "major"/"minor"/"pentatonic"/"blues", "bpm": int}
   Creates full project: markers + tracks + section-aware MIDI arrangement. SINGLE command, do NOT split.
   Section-aware: intro=sparsedrums+keys, verse=drums+bass+keys+melody, chorus=ALL instruments loud, bridge=keys+pad+strings, outro=winding down.
-- create_genre_project: {"genre": str, "tempo": int|null, "key": str, "scale": str, "custom_instruments": list[str]|null, "custom_sections": list|null}
+- create_genre_project: {"genre": str, "tempo": int|null, "key": str, "scale": str, "custom_instruments": list[str]|null, "custom_sections": list|null, "modifiers": dict|null}
    Creates a complete genre-aware project with auto-routing, buses, FX chains per track, and per-section MIDI.
    PREFER this over generate_project when user mentions a genre or wants a complete project setup.
 
@@ -157,6 +157,26 @@ Transport:
    - If not specified, use genre's default sections
 
    SINGLE command — do NOT split into multiple calls. This tool handles everything: tempo, markers, tracks, plugins, MIDI, buses, FX chains, and routing.
+
+   Modifier system (genre adaptation):
+   - You can adapt an existing genre by adding a "modifiers" field to create_genre_project
+   - The modifiers dict supports:
+     - "plugin_overrides": {"role": "plugin_name"} — override default instrument plugins
+       Example: {"lead_guitar": "JS: Distortion"} for heavier guitar tone
+     - "midi_modifiers": {"role": {"density_mod": float, "complexity": str}}
+       density_mod: -0.2 (sparser) to +0.2 (denser). complexity: "simple", "standard", "lead_melody", "chord_strum", "arpeggio"
+       Example: {"drums": {"density_mod": 0.1, "complexity": "standard"}, "lead_guitar": {"density_mod": 0.2, "complexity": "lead_melody"}}
+     - "fx_modifiers": {"role": ["plugin_name", ...]} — add extra FX beyond standard chain
+       Example: {"lead_guitar": ["JS: Delay"]} for a delay effect on the lead
+     - "section_changes": [{"name": str, "bars": int, "action": "add"|"modify"}] — change song structure
+       Example: {"name": "Solo", "bars": 8, "action": "add"} for a guitar solo section after chorus
+   - Use modifiers when the user asks for specific adaptations:
+     "more solos" → add a Solo section, increase lead guitar density
+     "heavier sound" → add distortion on guitars, increase drums density
+     "longer intro" → increase intro bars
+     "with piano" → add keys to plugin_overrides or custom_instruments
+   - SINGLE command — do NOT split into multiple calls
+
 - assess_arrangement: {"key": str, "scale": str, "bpm": int, "sections": list, "instruments": list} — Ask E2B model to rate the arrangement quality and suggest improvements.
 - create_song_structure: {"sections": [{"name": str, "bars": int}], "bpm": int}
 - set_fx_param: {"track": int, "fx": int, "param": int, "value": float}
@@ -206,6 +226,7 @@ Examples:
    "create an EDM banger" → {"tool":"create_genre_project","args":{"genre":"electronic"}}
    "new project with drums and bass" → {"tool":"create_genre_project","args":{"genre":"rock","custom_instruments":["drums","bass"]}}
    "create a pop song with piano and strings at 100 bpm" → {"tool":"create_genre_project","args":{"genre":"pop","tempo":100,"custom_instruments":["keys","strings"]}}
+   "create a metal project with a longer intro and more solos" → {"tool":"create_genre_project","args":{"genre":"metal","modifiers":{"midi_modifiers":{"lead_guitar":{"density_mod":0.2,"complexity":"lead_melody"}},"section_changes":[{"name":"Solo","bars":8,"action":"add"}]}}}
    "create project in D minor with drums bass melody, verse chorus verse" → {"tool":"generate_project","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16}],"instruments":["drums","bass","melody"],"key":"D","scale":"minor","bpm":120}}
   "set tempo 140 and play" → [{"tool":"set_tempo","args":{"bpm":140}},{"tool":"transport_control","args":{"action":"play"}}]
   "more reverb on track 2" → {"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.8}}
