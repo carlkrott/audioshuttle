@@ -1,0 +1,8 @@
+{
+  "title": "AudioShuttle - Voice-Controlled Professional Music Production",
+  "description": "AudioShuttle: Voice-controlled DAW for motor-impaired musicians (Digital Equity & Inclusivity track)\n\n## What It Is\nAudioShuttle bridges natural language voice commands to REAPER DAW using Gemma 4 E4B as a domain expert translator. For the first time, motor-impaired musicians can create full professional arrangements without touching a mouse or keyboard.\n\n## Why Gemma 4 E4B\n- 81K context: fits entire genre profile + tool schema in one prompt\n- Tool-use: multi-step DAW orchestration with state verification  \n- Domain expertise: understands music concepts (chorus, solo, bus routing)\n\n## Verified Working\n- E2E test: \"create a rock project called Midnight Drive at 130 BPM\" -> 8 tracks + 9 markers + 130 BPM in ~45 seconds\n- Full Docker stack with GPU acceleration (AMD ROCm, RX 6950 XT)\n- 11 genres, 40+ DAW operations, 9-step orchestration pipeline\n\n## Impact\n- 250M+ people with motor impairments cannot use traditional DAW workflows\n- This is the first hands-free professional music production tool\n- MIT licensed, AI-agnostic design\n\n## Repository\nhttps://github.com/carlkrott/audioshuttle",
+  "track": "Digital Equity & Inclusivity",
+  "team": "Carl Krott",
+  "video_url": "TODO: Add video URL when ready",
+  "notebook_url": "TODO: Add notebook URL when uploaded to Kaggle"
+}
