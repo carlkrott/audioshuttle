@@ -30,12 +30,13 @@ function handle_state_request()
         local color = reaper.GetTrackColor(track)
         local color_hex = string.format("#%06x", color & 0xFFFFFF)
         local item_count = reaper.CountTrackMediaItems(track)
+        local fx_count = reaper.TrackFX_GetCount(track)
         table.insert(tracks, {
             number = i + 1, name = name or "",
             volume = math.floor(vol * 100 + 0.5) / 100,
             pan = math.floor(pan * 100 + 0.5) / 100,
             mute = mute, solo = solo, armed = armed,
-            color = color_hex, items = item_count
+            color = color_hex, items = item_count, fx_count = fx_count
         })
     end
     local ps = reaper.GetPlayState()
