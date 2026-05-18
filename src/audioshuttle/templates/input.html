@@ -1,21 +1,50 @@
 {% extends "base.html" %}
 
 {% block content %}
-<h2>System Prompt</h2>
-{% if saved %}
-<p style="color: #0f9b58; font-weight: 600; margin-bottom: 12px;">✓ Saved</p>
-{% endif %}
-<form method="POST" action="/input/system-prompt">
-    <textarea name="system_prompt" rows="20" style="width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; resize: vertical;">{{ system_prompt }}</textarea>
-    <div style="margin-top: 8px; display: flex; gap: 8px;">
-        <button type="submit" style="background: #0f9b58; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Save</button>
+<div style="display: flex; gap: 20px; align-items: flex-start;">
+    <!-- Main Chat Area -->
+    <div style="flex: 1; min-width: 0;">
+        <h2>Chat with E4B Domain Expert</h2>
+        <div id="chat-window" style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; height: 75vh; display: flex; flex-direction: column;">
+            <div id="chat-messages" style="flex: 1; padding: 16px; overflow-y: auto;">
+                <div style="color: #8b949e; text-align: center; margin-top: 20px;">
+                    Start typing below or use the voice commands in the sidebar.
+                </div>
+            </div>
+            <div style="padding: 12px; border-top: 1px solid #30363d; background: #161b22; display: flex; gap: 8px;">
+                <input type="text" id="chat-input" placeholder="e.g. create a rock project at 120 bpm" style="flex: 1; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; font-size: 14px;" onkeypress="if(event.key === 'Enter') sendChat()">
+                <button onclick="sendChat()" style="background: #0f9b58; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold;">Send</button>
+            </div>
+        </div>
+        <script>
+            async function sendChat() {
+                const input = document.getElementById('chat-input');
+                const text = input.value.trim();
+                if (!text) return;
+                input.value = '';
+                
+                const msgs = document.getElementById('chat-messages');
+                msgs.innerHTML += `<div style="margin-bottom: 12px; text-align: right;"><span style="background: #0f9b58; color: white; padding: 8px 12px; border-radius: 12px; display: inline-block;">${text}</span></div>`;
+                msgs.scrollTop = msgs.scrollHeight;
+                
+                try {
+                    const resp = await fetch(`/replay?cmd=${encodeURIComponent(text)}`, { method: 'GET' });
+                    msgs.innerHTML += `<div style="margin-bottom: 12px;"><span style="background: #16213e; color: #c9d1d9; padding: 8px 12px; border-radius: 12px; display: inline-block; border: 1px solid #30363d;">Command sent to AudioShuttle Pipeline. Check DAW.</span></div>`;
+                    msgs.scrollTop = msgs.scrollHeight;
+                } catch (e) {
+                    msgs.innerHTML += `<div style="margin-bottom: 12px;"><span style="background: #ea433522; color: #ea4335; padding: 8px 12px; border-radius: 12px; display: inline-block; border: 1px solid #ea4335;">Error: ${e.message}</span></div>`;
+                    msgs.scrollTop = msgs.scrollHeight;
+                }
+            }
+        </script>
     </div>
-</form>
-<form method="POST" action="/input/system-prompt/reset" style="display:inline; margin-top: 8px;">
-    <button type="submit" style="background: #30363d; color: #aaa; border: 1px solid #444; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Reset to Default</button>
-</form>
 
-<h2 style="margin-top: 24px;">🎙 Voice Commands</h2>
+    <!-- Collapsible Sidebar -->
+    <div style="width: 420px; flex-shrink: 0; display: flex; flex-direction: column; gap: 16px;">
+        <details open style="background: #161b22; border: 1px solid #30363d; border-radius: 6px;">
+            <summary style="cursor: pointer; font-weight: bold; color: #c9d1d9; padding: 12px 16px; border-bottom: 1px solid #30363d; background: #21262d; border-radius: 6px 6px 0 0;">🎙 Voice Commands</summary>
+            <div style="padding: 16px;">
+                
 
     {% if not stt_available %}
 <div style="background: #ea433522; border: 1px solid #ea4335; border-radius: 6px; padding: 12px; margin-bottom: 16px; color: #ea4335; font-size: 13px;">
@@ -332,14 +361,49 @@ async function sendVoice(blob) {
 </script>
 {% endif %}
 
-<h2>AI Client Integration</h2>
+
+            </div>
+        </details>
+
+        <details style="background: #161b22; border: 1px solid #30363d; border-radius: 6px;">
+            <summary style="cursor: pointer; font-weight: bold; color: #c9d1d9; padding: 12px 16px; border-bottom: 1px solid #30363d; background: #21262d; border-radius: 6px 6px 0 0;">System Prompt</summary>
+            <div style="padding: 16px;">
+                
+{% if saved %}
+<p style="color: #0f9b58; font-weight: 600; margin-bottom: 12px;">✓ Saved</p>
+{% endif %}
+<form method="POST" action="/input/system-prompt">
+    <textarea name="system_prompt" rows="20" style="width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; resize: vertical;">{{ system_prompt }}</textarea>
+    <div style="margin-top: 8px; display: flex; gap: 8px;">
+        <button type="submit" style="background: #0f9b58; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Save</button>
+    </div>
+</form>
+<form method="POST" action="/input/system-prompt/reset" style="display:inline; margin-top: 8px;">
+    <button type="submit" style="background: #30363d; color: #aaa; border: 1px solid #444; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Reset to Default</button>
+</form>
+
+
+            </div>
+        </details>
+
+        <details style="background: #161b22; border: 1px solid #30363d; border-radius: 6px;">
+            <summary style="cursor: pointer; font-weight: bold; color: #c9d1d9; padding: 12px 16px; border-bottom: 1px solid #30363d; background: #21262d; border-radius: 6px 6px 0 0;">AI Client Integration</summary>
+            <div style="padding: 16px;">
+                
 <div style="background: #16213e; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
     <div style="margin-bottom: 6px;"><span class="label">Chat API URL:</span> <code style="color: #0f9b58;">{{ chat_api_url }}</code></div>
     <div><span class="label">Model Name:</span> <code style="color: #0f9b58;">{{ chat_model_name }}</code></div>
-    <p style="color: #555; font-size: 12px; margin-top: 8px;">Configure via AUDIOSHUTTLE_CHAT_API_URL and AUDIOSHUTTLE_CHAT_MODEL_NAME environment variables</p>
+    <p style="color: #555; font-size: 12px; margin-top: 8px;">Configure via AUDIOSHUTTLE_MODEL_API_URL and AUDIOSHUTTLE_MODEL_NAME environment variables</p>
 </div>
 
-<h2>MCP Server Configuration</h2>
+
+            </div>
+        </details>
+
+        <details style="background: #161b22; border: 1px solid #30363d; border-radius: 6px;">
+            <summary style="cursor: pointer; font-weight: bold; color: #c9d1d9; padding: 12px 16px; border-bottom: 1px solid #30363d; background: #21262d; border-radius: 6px 6px 0 0;">MCP Server Configuration</summary>
+            <div style="padding: 16px;">
+                
 <p style="color: #aaa; font-size: 13px; margin-bottom: 12px;">
     Add AudioShuttle's MCP server to your AI client so it can control your DAW. Copy the JSON for your tool:
 </p>
@@ -402,4 +466,9 @@ function copyMcp(id) {
     });
 }
 </script>
+
+            </div>
+        </details>
+    </div>
+</div>
 {% endblock %}

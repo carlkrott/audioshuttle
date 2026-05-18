@@ -3,33 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from typing import Any
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from audioshuttle.daw_detect import detect_daw
-from audioshuttle.gpu_monitor import get_gpu_vram
+from audioshuttle.error_log import error_log
+from audioshuttle.models import CommandResult
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Command history stored module-level so it survives across requests
-_command_history: deque[dict[str, Any]] = deque(maxlen=100)
+# Global command history for the session
+_history = deque(maxlen=50)
 
 
 def record_command(command: str, tool: str, success: bool) -> None:
-    """Record a command execution in history."""
-    from datetime import datetime, timezone
-
-    _command_history.append(
-        {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "command": command,
-            "tool": tool,
-            "success": success,
-        }
-    )
+    """Add a command to the global history."""
+    from datetime import datetime
+    _history.appendleft({
+        "timestamp": datetime.now().isoformat(),
+        "command": command,
+        "tool": tool,
+        "success": success,
+    })
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -59,34 +59,26 @@ async def home_page(request: Request):
 
     # Determine DAW connection — probe Reaper if not yet seen
     daw_connected = False
+    state = None
     if bridge is not None:
+        if hasattr(bridge, "refresh_state"):
+            try:
+                state = bridge.refresh_state(wait=0.3)
+            except Exception:
+                pass
+        
         if not bridge.is_connected and hasattr(bridge, "probe"):
             bridge.probe()
         daw_connected = bridge.is_connected
 
     # Get DAW detection info
+    from audioshuttle.daw_detect import detect_daw
     detection = detect_daw()
 
-    status = {
-        "daw_connected": daw_connected,
-        "daw_name": settings.daw_type.title(),
-        "mcp_running": True,
-        "model_loaded": model_loaded,
-        "model_state": model_state,
-        "model_inference_ms": model_inference_ms,
-        "model_tokens_sec": model_tokens_sec,
-        "gpu_vram": get_gpu_vram(card_index=1),
-        "detection": detection,
-    }
-
-    errors = err_log.get_recent(50)
-    history = list(_command_history)[-20:]
-
-    # Check STT availability
+    # Get STT availability
     stt_available = False
     try:
         from audioshuttle.stt import STTEngine
-
         stt_available = STTEngine().available
     except Exception:
         pass
@@ -101,6 +93,23 @@ async def home_page(request: Request):
         if voice_hotkey is not None and hasattr(voice_hotkey, "is_running") and voice_hotkey.is_running:
             voice_mode = "hotkey"
 
+    status = {
+        "model_state": model_state,
+        "model_inference_ms": model_inference_ms,
+        "model_tokens_sec": model_tokens_sec,
+        "daw_connected": daw_connected,
+        "detection": detection,
+        "gpu_vram": {"vram_used_mb": 0, "vram_total_mb": 0},
+    }
+
+    # Add GPU info if available
+    if model_server and hasattr(model_server, "get_vram_info"):
+        status["gpu_vram"] = model_server.get_vram_info()
+
+    # Get recent errors
+    errors = err_log.get_recent(n=20)
+    history = list(_history)
+
     return app.state.templates.TemplateResponse(
         request,
         "home.html",
@@ -110,6 +119,8 @@ async def home_page(request: Request):
             "history": history,
             "stt_available": stt_available,
             "voice_mode": voice_mode,
+            "settings": settings,
+            "state": state,
         },
     )
 
@@ -120,12 +131,14 @@ async def transport_control(request: Request, action: str = Form(...)):
     app = request.app
     bridge = app.state.bridge
 
-    if bridge is not None and hasattr(bridge, "send_command"):
-        from audioshuttle.error_log import error_log
+    if bridge is None:
+        error_log.add("Transport error: Reaper bridge not initialized", level="error")
+        return RedirectResponse(url="/", status_code=303)
 
+    if hasattr(bridge, "send_command"):
         # Special case: play during recording → stop record first, then play
         if action == "play":
-            state = getattr(bridge, "_state", None)
+            state = getattr(bridge, "state", None)
             is_recording = state and getattr(state.transport, "recording", False)
             if is_recording:
                 # Stop recording first, then start playing
@@ -149,7 +162,7 @@ async def transport_control(request: Request, action: str = Form(...)):
             if address:
                 result = bridge.send_command(address)
                 record_command(action, address, result.success)
-                error_log.add(f"Transport: {action}", level="info")
+                error_log.add(f"Transport: {action} ({address}) -> {'OK' if result.success else 'FAIL'}", level="info")
 
     return RedirectResponse(url="/", status_code=303)
 
@@ -160,7 +173,7 @@ async def replay_command(request: Request, cmd: str = ""):
     app = request.app
     bridge = app.state.bridge
 
-    # Sanitize — skip replay if the command looks like garbage (non-printable, too long, etc.)
+    # Sanitize — skip replay if the command looks like garbage
     cmd = cmd.strip()
     if not cmd or len(cmd) > 200 or not all(c.isprintable() for c in cmd):
         return RedirectResponse(url="/", status_code=303)
@@ -173,7 +186,6 @@ async def replay_command(request: Request, cmd: str = ""):
     if cmd in direct_transport:
         result = bridge.send_command(f"/{cmd}")
         record_command(cmd, f"/{cmd}", result.success)
-        from audioshuttle.error_log import error_log
         error_log.add(f"Replay: {cmd}", level="info")
     else:
         # Natural language command — translate via translator
@@ -182,42 +194,35 @@ async def replay_command(request: Request, cmd: str = ""):
             from audioshuttle.models import DAWState
 
             # Get live DAW state for context
-            bridge = getattr(app.state, "bridge", None)
             daw_state = DAWState()
-            if bridge and hasattr(bridge, 'refresh_state'):
+            if hasattr(bridge, 'refresh_state'):
                 try:
                     daw_state = bridge.refresh_state(wait=0.3)
                 except Exception:
                     pass
             results = translator.translate_multi(cmd, daw_state)
             if results and any(r.success for r in results):
-                from audioshuttle.error_log import error_log
                 executed = 0
                 for i, r in enumerate(results):
                     if not r.success:
                         error_log.add(f"Replay tool #{i} failed: {r.error}", level="warning")
                         continue
                     error_log.add(f"Replay NL: '{cmd}' → {r.tool} (step {i+1}/{len(results)})", level="info")
-                    # Execute the translated tool via daw_command on the bridge
-                    if bridge and hasattr(bridge, r.tool):
+                    # Execute the translated tool via getattr on the bridge
+                    if hasattr(bridge, r.tool):
                         try:
                             tool_fn = getattr(bridge, r.tool)
                             cmd_args = r.args if r.args else {}
                             cmd_result = tool_fn(**cmd_args) if isinstance(cmd_args, dict) else tool_fn()
-                            error_log.add(f"Replay tool '{r.tool}' done: success={getattr(cmd_result, 'success', '?')}", level="info")
+                            error_log.add(f"Replay tool '{r.tool}' done", level="info")
                         except Exception as e:
                             error_log.add(f"Replay tool '{r.tool}' exception: {e}", level="error")
-                    else:
-                        error_log.add(f"Replay tool '{r.tool}' skipped: bridge={bridge is not None} hasattr={hasattr(bridge, r.tool) if bridge else 'N/A'}", level="warning")
-                        continue
                     executed += 1
-                    # Brief delay between tools — Reaper needs time to insert track before rename
                     await asyncio.sleep(0.5)
                 record_command(cmd, f"multi({executed} tools)", True)
                 error_log.add(f"Replay: '{cmd}' → {executed} tool(s) executed", level="info")
             else:
                 record_command(cmd, "replay", False)
-                from audioshuttle.error_log import error_log
                 error_log.add(f"Replay failed: '{cmd}'", level="warning")
         else:
             record_command(cmd, "replay", False)

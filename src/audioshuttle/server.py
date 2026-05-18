@@ -355,7 +355,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         # Try to get extended state (armed, color) from raw watcher data
         try:
             import json as _json
-            watcher_path = "/tmp/audioshuttle_daw_state.json"
+            watcher_path = "/communication/audioshuttle_daw_state.json"
             with open(watcher_path) as f:
                 watcher_data = _json.load(f)
             for wt in watcher_data.get("tracks", []):

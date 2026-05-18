@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Default capture settings
 CAPTURE_WIDTH = 1280
 CAPTURE_HEIGHT = 720
-CAPTURE_PATH = "/tmp/audioshuttle_screenshot.png"
+CAPTURE_PATH = "/communication/audioshuttle_screenshot.png"
 
 
 def find_reaper_window() -> int | None:

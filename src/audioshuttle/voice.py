@@ -74,6 +74,13 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
         "undo": lambda: bridge.undo(),
         "redo": lambda: bridge.redo(),
         "set_tempo": lambda: bridge.set_tempo(float(args["bpm"])),
+        "wipe_project": lambda: bridge.wipe_project(),
+        "create_genre_project": lambda: bridge.create_genre_project(
+            genre=str(args.get("genre", "rock")),
+            tempo=int(args["tempo"]) if "tempo" in args else None,
+            key=str(args.get("key", "C")),
+            scale=str(args.get("scale", "major")),
+        ),
         "insert_track": lambda: bridge.insert_track(),
         "rename_track": lambda: bridge.rename_track(
             int(args["track"]), str(args["name"]),
@@ -192,10 +199,12 @@ class VoicePipeline:
         bridge: Any | None = None,
         translator: Any | None = None,
     ) -> None:
+        from audioshuttle.audio_engine_e4b import GemmaAudioEngine
         self._stt = stt_engine
         self._model_server = model_server
         self._bridge = bridge
         self._translator = translator
+        self._gemma_audio = GemmaAudioEngine(model_server)
 
     async def process_audio(
         self,
@@ -222,26 +231,26 @@ class VoicePipeline:
                 tmp_path = tmp.name
 
             # Step 1: STT
-            if self._stt is None:
-                return {
-                    "transcription": None,
-                    "formatted": None,
-                    "command": None,
-                    "success": False,
-                    "error": "STT engine not available",
-                }
-
+            raw_text = ""
             try:
-                raw_text = self._stt.transcribe(tmp_path)
-                logger.info("Whisper transcription: %r", raw_text)
+                if hasattr(self, "_gemma_audio") and self._gemma_audio.is_available:
+                    raw_text = self._gemma_audio.transcribe(tmp_path)
+                    if raw_text:
+                        logger.info("E4B transcription: %r", raw_text)
+                
+                if not raw_text and self._stt is not None:
+                    raw_text = self._stt.transcribe(tmp_path)
+                    logger.info("Whisper transcription: %r", raw_text)
             except Exception as e:
-                return {
-                    "transcription": None,
-                    "formatted": None,
-                    "command": None,
-                    "success": False,
-                    "error": f"Transcription failed: {e}",
-                }
+                logger.error("STT failed: %s", e)
+                if not raw_text:
+                    return {
+                        "transcription": None,
+                        "formatted": None,
+                        "command": None,
+                        "success": False,
+                        "error": f"Transcription failed: {e}",
+                    }
 
             if not raw_text.strip():
                 return {

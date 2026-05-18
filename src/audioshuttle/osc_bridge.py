@@ -156,6 +156,15 @@ class ReaperOSC:
         # UDP client for sending commands
         self._client = udp_client.SimpleUDPClient(host, send_port)
 
+        # Dedicated temp directory to avoid /tmp sticky bit issues
+        self._temp_dir = "/communication"
+        os.makedirs(self._temp_dir, exist_ok=True)
+        try:
+            os.chmod(self._temp_dir, 0o777)
+        except OSError:
+            pass
+        self._chown_to_reaper(self._temp_dir)
+
         # Internal state
         self._state = DAWState()
         self._last_feedback_time: float = time.time()  # Grace period on startup
@@ -642,6 +651,7 @@ class ReaperOSC:
         midi_path = os.path.join(tempfile.gettempdir(), midi_filename)
         with open(midi_path, "wb") as f:
             f.write(buf.getvalue())
+        os.chmod(midi_path, 0o666)
 
         # Also copy to home dir for easy access
         home_copy = os.path.expanduser(f"~/audioshuttle_{role}.mid")
@@ -664,7 +674,7 @@ class ReaperOSC:
         # Sequence: 1) Write MIDI file → 2) Write trigger → 3) Wait for consumption
         import time
 
-        trigger_path = os.path.join(tempfile.gettempdir(), "audioshuttle_import_trigger")
+        trigger_path = "/communication/audioshuttle_import_trigger"
         imported = False
 
         # Remove stale trigger if any
@@ -673,20 +683,18 @@ class ReaperOSC:
         except OSError:
             pass
 
-        # Create trigger file owned by Reaper's user (needed for sticky-bit /tmp)
-        # The __startup.lua watcher runs as the Reaper user and needs to os.remove() it
         # Trigger format: "import" or "import:track:N:role" for targeting a specific track
         trigger_content = "import"
         if target_track is not None:
             trigger_content = f"import:track:{target_track}:{role}"
+        
         try:
-            try:
-                os.remove(trigger_path)
-            except OSError:
-                pass
-            with open(trigger_path, "w") as f:
-                f.write(trigger_content)
-            self._chown_to_reaper(trigger_path)
+            os.remove(trigger_path)
+        except OSError:
+            pass
+        with open(trigger_path, "w") as f:
+            f.write(trigger_content)
+        self._chown_to_reaper(trigger_path)
         except OSError:
             pass
 
@@ -768,7 +776,7 @@ class ReaperOSC:
         Returns:
             True if trigger was consumed (cleared), False otherwise.
         """
-        trigger_path = "/tmp/audioshuttle_clear_trigger"
+        trigger_path = "/communication/audioshuttle_clear_trigger"
         try:
             os.remove(trigger_path)
         except OSError:
@@ -794,7 +802,7 @@ class ReaperOSC:
         Returns:
             True if trigger was consumed, False otherwise.
         """
-        trigger_path = "/tmp/audioshuttle_track_insert_trigger"
+        trigger_path = "/communication/audioshuttle_track_insert_trigger"
         try:
             os.remove(trigger_path)
         except OSError:
@@ -840,7 +848,7 @@ class ReaperOSC:
             bar_offset += bars
 
         # Write trigger file for Lua watcher
-        trigger_path = "/tmp/audioshuttle_markers_trigger"
+        trigger_path = "/communication/audioshuttle_markers_trigger"
         try:
             try:
                 os.remove(trigger_path)
@@ -954,7 +962,7 @@ class ReaperOSC:
         def _watcher_alive() -> bool:
             """Check if Lua watcher defer loop is still running."""
             try:
-                alive_path = "/tmp/audioshuttle_watcher_alive"
+                alive_path = "/communication/audioshuttle_watcher_alive"
                 if not os.path.exists(alive_path):
                     return False
                 mtime = os.path.getmtime(alive_path)
@@ -1067,6 +1075,7 @@ class ReaperOSC:
             )
             with open(midi_path, "wb") as f:
                 f.write(buf.getvalue())
+            os.chmod(midi_path, 0o666)
             logger.info("generate_project: wrote %s (%d bytes)",
                          midi_path, len(buf.getvalue()))
 
@@ -1075,7 +1084,7 @@ class ReaperOSC:
             time.sleep(0.5)
 
             # Import via watcher
-            trigger_path = "/tmp/audioshuttle_import_trigger"
+            trigger_path = "/communication/audioshuttle_import_trigger"
             try:
                 os.remove(trigger_path)
             except OSError:
@@ -1297,7 +1306,7 @@ class ReaperOSC:
         def _watcher_alive() -> bool:
             """Check if Lua watcher defer loop is still running."""
             try:
-                alive_path = "/tmp/audioshuttle_watcher_alive"
+                alive_path = "/communication/audioshuttle_watcher_alive"
                 if not os.path.exists(alive_path):
                     return False
                 mtime = os.path.getmtime(alive_path)
@@ -1329,7 +1338,7 @@ class ReaperOSC:
 
         def _read_daw_state_json() -> dict:
             """Read and parse the DAW state JSON dump."""
-            state_path = "/tmp/audioshuttle_daw_state.json"
+            state_path = "/communication/audioshuttle_daw_state.json"
             try:
                 with open(state_path, "r") as f:
                     return _json.load(f)
@@ -1639,13 +1648,14 @@ class ReaperOSC:
                 midi_path = os.path.join(tempfile.gettempdir(), f"audioshuttle_{role}.mid")
                 with open(midi_path, "wb") as f:
                     f.write(buf.getvalue())
+                os.chmod(midi_path, 0o666)
 
                 # Clear existing items before import
                 self._clear_track_items(track_idx, wait=1.0)
                 _time.sleep(0.5)
 
                 # Import via watcher trigger
-                trigger_path = "/tmp/audioshuttle_import_trigger"
+                trigger_path = "/communication/audioshuttle_import_trigger"
                 try:
                     os.remove(trigger_path)
                 except OSError:
@@ -1970,7 +1980,7 @@ class ReaperOSC:
 
             # Render audio section via Lua trigger
             ts.emit_audio(f"Rendering {duration_sec}s from {start_sec}s...")
-            wav_path = f"/tmp/audioshuttle_render_{track or 'mix'}.wav"
+            wav_path = f"/communication/audioshuttle_render_{track or 'mix'}.wav"
             render_ok = self._render_audio_section(start_sec, duration_sec, wav_path)
 
             if not render_ok or not os.path.exists(wav_path):
@@ -2454,7 +2464,7 @@ class ReaperOSC:
         # Write color command file for watcher
         import os
         import glob
-        color_path = "/tmp/audioshuttle_color_cmd.txt"
+        color_path = "/communication/audioshuttle_color_cmd.txt"
         try:
             with open(color_path, "w") as f:
                 f.write(f"{track} {hex_color}")
@@ -2779,8 +2789,8 @@ class ReaperOSC:
         parts = [command, str(track)] + list(args)
         content = ":".join(parts)
         result = self._lua_trigger(
-            "/tmp/audioshuttle_fx_trigger",
-            "/tmp/audioshuttle_fx_result.json",
+            "/communication/audioshuttle_fx_trigger",
+            "/communication/audioshuttle_fx_result.json",
             content,
             wait=wait,
         )
@@ -2945,8 +2955,8 @@ class ReaperOSC:
         """
         import json as _json
 
-        trigger_path = "/tmp/audioshuttle_fx_list_request"
-        result_path = "/tmp/audioshuttle_fx_list.json"
+        trigger_path = "/communication/audioshuttle_fx_list_request"
+        result_path = "/communication/audioshuttle_fx_list.json"
 
         try:
             os.remove(result_path)
@@ -3006,23 +3016,27 @@ class ReaperOSC:
         )
 
     def _chown_to_reaper(self, path: str) -> None:
-        """Chown a file to the Reaper user (found via /proc).
+        """Chown a file to the Reaper user (found via /proc) and chmod 666."""
+        # Always chmod 666 so ANY user can read/write/delete triggers
+        try:
+            os.chmod(path, 0o666)
+        except OSError:
+            pass
 
-        Skips sudo wrappers (UID 0) to find the actual Reaper process
-        running as the target Reaper user.
-        """
         import glob as _glob
         for pid_dir in _glob.glob("/proc/[0-9]*"):
             try:
                 with open(f"{pid_dir}/cmdline", "rb") as pf:
-                    cmdline = pf.read()
-                    if b"REAPER/reaper" in cmdline and b"sudo" not in cmdline:
+                    cmdline = pf.read().lower()
+                    # More flexible match: just "reaper" in path, but skip sudo
+                    if b"reaper" in cmdline and b"sudo" not in cmdline:
                         stat = os.stat(f"{pid_dir}")
-                        # Skip root (sudo wrapper) — we want the actual user
-                        if stat.st_uid == 0:
-                            continue
-                        os.chown(path, stat.st_uid, stat.st_gid)
-                        break
+                        if stat.st_uid != 0:
+                            try:
+                                os.chown(path, stat.st_uid, stat.st_gid)
+                            except OSError:
+                                pass
+                            return
             except (OSError, PermissionError):
                 continue
 
@@ -3090,8 +3104,8 @@ class ReaperOSC:
             )
 
         result = self._lua_trigger(
-            "/tmp/audioshuttle_fx_params_request",
-            "/tmp/audioshuttle_fx_params.json",
+            "/communication/audioshuttle_fx_params_request",
+            "/communication/audioshuttle_fx_params.json",
             f"{track}:{fx}",
         )
 
@@ -3139,8 +3153,8 @@ class ReaperOSC:
             )
 
         result = self._lua_trigger(
-            "/tmp/audioshuttle_routing_trigger",
-            "/tmp/audioshuttle_routing_result.json",
+            "/communication/audioshuttle_routing_trigger",
+            "/communication/audioshuttle_routing_result.json",
             f"create_send:{source_track}:{dest_track}",
         )
 
@@ -3170,8 +3184,8 @@ class ReaperOSC:
             )
 
         result = self._lua_trigger(
-            "/tmp/audioshuttle_routing_trigger",
-            "/tmp/audioshuttle_routing_result.json",
+            "/communication/audioshuttle_routing_trigger",
+            "/communication/audioshuttle_routing_result.json",
             f"delete_send:{track}:{send}",
         )
 
@@ -3195,8 +3209,8 @@ class ReaperOSC:
         genre project to start from a clean state.
         """
         import os as _os
-        trigger_path = "/tmp/audioshuttle_wipe_trigger"
-        done_path = "/tmp/audioshuttle_wipe_done"
+        trigger_path = "/communication/audioshuttle_wipe_trigger"
+        done_path = "/communication/audioshuttle_wipe_done"
 
         # Clean up any previous done file
         try:
@@ -3257,8 +3271,8 @@ class ReaperOSC:
             )
 
         result = self._lua_trigger(
-            "/tmp/audioshuttle_input_trigger",
-            "/tmp/audioshuttle_input_result.json",
+            "/communication/audioshuttle_input_trigger",
+            "/communication/audioshuttle_input_result.json",
             f"{track}:{input_code}",
         )
 
@@ -3330,8 +3344,8 @@ class ReaperOSC:
             )
 
         result = self._lua_trigger(
-            "/tmp/audioshuttle_move_trigger",
-            "/tmp/audioshuttle_move_result.json",
+            "/communication/audioshuttle_move_trigger",
+            "/communication/audioshuttle_move_result.json",
             f"{track}:{new_position}",
         )
 
@@ -3362,7 +3376,7 @@ class ReaperOSC:
 
         Writes a trigger file that the __startup.lua watcher detects.
         The watcher dumps full track state (names, volumes, colors, etc.)
-        to /tmp/audioshuttle_daw_state.json, which we read back.
+        to /communication/audioshuttle_daw_state.json, which we read back.
 
         Args:
             wait: Seconds to wait for the state dump (default 0.5s).
@@ -3370,8 +3384,8 @@ class ReaperOSC:
         import json
         import glob
 
-        state_path = "/tmp/audioshuttle_daw_state.json"
-        trigger_path = "/tmp/audioshuttle_state_request"
+        state_path = "/communication/audioshuttle_daw_state.json"
+        trigger_path = "/communication/audioshuttle_state_request"
 
         # Remove stale state file
         try:
@@ -3421,6 +3435,7 @@ class ReaperOSC:
             track.pan = td.get("pan", 0.0)
             track.mute = td.get("mute", False)
             track.solo = td.get("solo", False)
+            track.color = td.get("color", "#58a6ff")
             self._state.tracks.append(track)
         self._state.tracks.sort(key=lambda t: t.track_number)
 

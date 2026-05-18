@@ -69,8 +69,8 @@ async def input_page(request: Request):
         {
             "system_prompt": current_prompt,
             "ai_clients": AI_CLIENTS,
-            "chat_api_url": settings.chat_api_url,
-            "chat_model_name": settings.chat_model_name,
+            "chat_api_url": settings.model_api_url,
+            "chat_model_name": settings.model_name,
             "saved": saved,
             "voice_cleanup": settings.voice_cleanup,
             "stt_available": stt_available,

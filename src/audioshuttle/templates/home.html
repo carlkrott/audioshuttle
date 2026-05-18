@@ -160,7 +160,7 @@
         <div class="card-label">AI Model</div>
         <div class="card-value">
             {% if status.model_state == 'running' %}
-            <span class="badge badge-ok">Gemma E2B Active</span>
+            <span class="badge badge-ok">{{ settings.model_name }} ({{ settings.model_api_url.split('/v1')[0] }})</span>
             {% elif status.model_state == 'loading' %}
             <span class="badge badge-warn">Loading...</span>
             {% else %}
@@ -192,15 +192,7 @@
         </div>
     </div>
 
-    <!-- Detected DAW -->
-    <div class="status-card">
-        <div class="card-label">Detected</div>
-        <div class="card-value">
-            <span class="badge {% if status.detection.detected != 'none' %}badge-ok{% else %}badge-off{% endif %}">
-                {{ status.detection.detected }}
-            </span>
-        </div>
-    </div>
+    
 
     <!-- STT -->
     <div class="status-card">
@@ -254,6 +246,45 @@
         <input type="hidden" name="action" value="pause">
         <button class="transport-btn pause" type="submit">⏸ Pause</button>
     </form>
+</div>
+
+
+<h2 class="section-header">Live Project State</h2>
+<div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin-bottom: 24px;">
+    {% if state and state.tracks %}
+    <div style="display: flex; gap: 16px; margin-bottom: 12px; font-size: 14px;">
+        <div><span style="color: #888;">Tempo:</span> <strong style="color: #c9d1d9;">{{ state.transport.tempo }} BPM</strong></div>
+        <div><span style="color: #888;">Playing:</span> <strong style="color: #c9d1d9;">{{ 'Yes' if state.transport.playing else 'No' }}</strong></div>
+        <div><span style="color: #888;">Position:</span> <strong style="color: #c9d1d9;">{{ state.transport.position_seconds|round(1) }}s</strong></div>
+    </div>
+    <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
+        <thead>
+            <tr style="border-bottom: 1px solid #30363d; color: #888;">
+                <th style="padding: 6px;">#</th>
+                <th style="padding: 6px;">Track Name</th>
+                <th style="padding: 6px;">Vol</th>
+                <th style="padding: 6px;">Pan</th>
+                <th style="padding: 6px;">State</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for t in state.tracks %}
+            <tr style="border-bottom: 1px solid #21262d; color: #c9d1d9;">
+                <td style="padding: 6px;">{{ t.track_number }}</td>
+                <td style="padding: 6px;"><span style="color: {{ t.color|default('#58a6ff', true) }};">{{ t.name }}</span></td>
+                <td style="padding: 6px;">{{ t.volume|round(2) }}</td>
+                <td style="padding: 6px;">{{ t.pan|round(2) }}</td>
+                <td style="padding: 6px;">
+                    {% if t.mute %}<span style="color: #ea4335; margin-right: 4px;">[M]</span>{% endif %}
+                    {% if t.solo %}<span style="color: #fbbc04; margin-right: 4px;">[S]</span>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="color: #888; font-size: 13px; text-align: center;">No project state available. Play or move transport to fetch state.</div>
+    {% endif %}
 </div>
 
 <h2 class="section-header">Command History</h2>

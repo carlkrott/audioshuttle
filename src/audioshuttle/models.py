@@ -18,6 +18,7 @@ class TrackState(BaseModel):
     mute: bool = False
     solo: bool = False
     selected: bool = False
+    color: str = "#58a6ff"
 
     model_config = {"populate_by_name": True}
 

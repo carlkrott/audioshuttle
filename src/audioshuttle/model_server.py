@@ -57,6 +57,8 @@ class ModelServer:
         self._external_last_check: float = 0.0
         self._external_available: bool = False
         self._external_mode: bool = False
+        self._last_inference_ms: float | None = None
+        self._avg_tokens_sec: float | None = None
 
     @property
     def is_running(self) -> bool:
@@ -87,6 +89,41 @@ class ModelServer:
     def base_url(self) -> str:
         """Base URL for the model API."""
         return self._base_url
+
+    def get_vram_info(self) -> dict[str, int]:
+        """Get VRAM info via rocm-smi on the host with fallbacks."""
+        # 1. Try rocm-smi command (if available in container or via host)
+        try:
+            result = subprocess.run(
+                ["rocm-smi", "--showmeminfo", "vram", "--json"],
+                capture_output=True, text=True, timeout=1
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                for k, v in data.items():
+                    if "card" in k.lower():
+                        total = int(v.get("VRAM Total Memory (B)", 0)) // (1024 * 1024)
+                        used = int(v.get("VRAM Total Used Memory (B)", 0)) // (1024 * 1024)
+                        if total > 0:
+                            return {"vram_used_mb": used, "vram_total_mb": total}
+        except Exception:
+            pass
+
+        # 2. Try parsing /sys/class/drm (AMD specific)
+        try:
+            # card0 is usually the dGPU
+            sys_path = "/sys/class/drm/card0/device"
+            if os.path.exists(sys_path):
+                with open(f"{sys_path}/mem_info_vram_total", "r") as f:
+                    total = int(f.read().strip()) // (1024 * 1024)
+                with open(f"{sys_path}/mem_info_vram_used", "r") as f:
+                    used = int(f.read().strip()) // (1024 * 1024)
+                if total > 0:
+                    return {"vram_used_mb": used, "vram_total_mb": total}
+        except Exception:
+            pass
+        
+        return {"vram_used_mb": 0, "vram_total_mb": 0}
 
     def start(self, wait: bool = True, timeout: float = 60.0) -> bool:
         """Start the llama-server process with ROCm GPU offloading.

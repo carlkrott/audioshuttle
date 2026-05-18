@@ -4,7 +4,7 @@ Thread-safe singleton that receives events from all pipeline stages
 (model, translator, executor, vision, audio) and broadcasts to subscribers
 (overlay, log file, SSE endpoint).
 
-Events are also written to /tmp/audioshuttle_thinking.jsonl for MCP queries.
+Events are also written to /communication/audioshuttle_thinking.jsonl for MCP queries.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
-THINKING_LOG_PATH = "/tmp/audioshuttle_thinking.jsonl"
+THINKING_LOG_PATH = "/communication/audioshuttle_thinking.jsonl"
 MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
 
 

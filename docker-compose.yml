@@ -64,20 +64,36 @@ services:
       context: .
       dockerfile: Dockerfile
     network_mode: "host"
+    pid: "host"
+    privileged: true
+    group_add:
+      - "992"
     volumes:
       # Share /tmp with host so the watcher state file is accessible
       # The Reaper Lua watcher writes to /tmp/audioshuttle_daw_state.json
       - /tmp:/tmp
+      - ./communication:/communication
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - ~/.Xauthority:/home/audioshuttle/.Xauthority
+      - /dev/input:/dev/input
+      - /dev/snd:/dev/snd
+      - /run/user/1000:/run/user/1000
     depends_on:
       e4b:
         condition: service_healthy
     command: audioshuttle --transport=standalone --host=0.0.0.0 --port=8765 --no-browser --no-tray --no-model
     environment:
       - AUDIOSHUTTLE_MODEL_API_URL=http://localhost:8102/v1/chat/completions
-      - AUDIOSHUTTLE_OSC_HOST=127.0.0.1
-      - AUDIOSHUTTLE_OSC_PORT=8000
+      - AUDIOSHUTTLE_REAPER_HOST=127.0.0.1
+      - AUDIOSHUTTLE_REAPER_PORT=8000
+      - AUDIOSHUTTLE_REAPER_FEEDBACK_PORT=9000
       - AUDIOSHUTTLE_HOST=0.0.0.0
       - AUDIOSHUTTLE_PORT=8765
+      - DISPLAY=${DISPLAY:-:0}
+      - XAUTHORITY=/home/audioshuttle/.Xauthority
+      - WAYLAND_DISPLAY=$WAYLAND_DISPLAY
+      - XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR
+      - QT_QPA_PLATFORM=wayland
     env_file: .env
     stdin_open: true
     tty: true
