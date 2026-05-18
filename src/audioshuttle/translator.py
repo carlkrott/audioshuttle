@@ -129,7 +129,7 @@ Transport:
   Creates full project: markers + tracks + section-aware MIDI arrangement. SINGLE command, do NOT split.
   Section-aware: intro=sparsedrums+keys, verse=drums+bass+keys+melody, chorus=ALL instruments loud, bridge=keys+pad+strings, outro=winding down.
 - create_genre_project: {"genre": str, "tempo": int|null, "key": str, "scale": str, "custom_instruments": list[str]|null, "custom_sections": list|null, "modifiers": dict|null}
-   Creates a complete genre-aware project with auto-routing, buses, FX chains per track, and per-section MIDI.
+   Creates a complete genre-aware project with auto-routing, doubled instruments, layered sections, buses, FX chains per track, and per-section MIDI.
    PREFER this over generate_project when user mentions a genre or wants a complete project setup.
 
    Genre detection — pass the exact genre name the user said:
@@ -141,7 +141,7 @@ Transport:
    - If user says a multi-word genre like "hip hop" → genre="hiphop"
    - If user mentions a music style not in the list, use genre="rock" as default
    - Do NOT guess — use the exact genre name. Each genre has a unique profile
-     with custom instruments, sections, tempo, and FX chains.
+     with custom instruments, sections, tempo, FX chains, AND doubling config.
 
    Tempo detection — extract BPM if user specifies:
    - "at 140 bpm", "140 bpm", "tempo 140" → tempo=140
@@ -161,20 +161,30 @@ Transport:
    Modifier system (genre adaptation):
    - You can adapt an existing genre by adding a "modifiers" field to create_genre_project
    - The modifiers dict supports:
+     - "vibe": str — descriptive mood ("heavy", "chill", "epic", "stripped_back", "anthemic", "dark", "bright")
+       Example: "heavy metal" → vibe="heavy"
+     - "energy": str — overall energy level ("low", "medium", "high", "ballad", "banger")
+       Example: "chill pop" → energy="low"
+     - "emphasis": list[str] — instruments to feature/prominence ("cowbell", "lead_guitar", "vocals", "drums")
+       Each emphasized instrument gets a density_mod boost of +0.2
+       Example: "more cowbell" → emphasis=["cowbell"]
      - "plugin_overrides": {"role": "plugin_name"} — override default instrument plugins
        Example: {"lead_guitar": "JS: Distortion"} for heavier guitar tone
      - "midi_modifiers": {"role": {"density_mod": float, "complexity": str}}
-       density_mod: -0.2 (sparser) to +0.2 (denser). complexity: "simple", "standard", "lead_melody", "chord_strum", "arpeggio"
+       density_mod: -0.3 (sparser) to +0.3 (denser). complexity: "simple", "standard", "lead_melody", "chord_strum", "arpeggio"
        Example: {"drums": {"density_mod": 0.1, "complexity": "standard"}, "lead_guitar": {"density_mod": 0.2, "complexity": "lead_melody"}}
      - "fx_modifiers": {"role": ["plugin_name", ...]} — add extra FX beyond standard chain
        Example: {"lead_guitar": ["JS: Delay"]} for a delay effect on the lead
      - "section_changes": [{"name": str, "bars": int, "action": "add"|"modify"}] — change song structure
        Example: {"name": "Solo", "bars": 8, "action": "add"} for a guitar solo section after chorus
    - Use modifiers when the user asks for specific adaptations:
-     "more solos" → add a Solo section, increase lead guitar density
-     "heavier sound" → add distortion on guitars, increase drums density
+     "more solos" → add a Solo section, emphasis=["lead_guitar"], increase lead guitar density
+     "heavier sound" → vibe="heavy", add distortion on guitars, increase drums density
      "longer intro" → increase intro bars
-     "with piano" → add keys to plugin_overrides or custom_instruments
+     "with piano" → add keys to custom_instruments
+     "more cowbell" → emphasis=["cowbell"], cowbell density_mod +0.3
+     "layered strings" → emphasis=["strings"], strings get density boost
+     "anthemic" → vibe="anthemic", energy="high", emphasize vocals and pad
    - SINGLE command — do NOT split into multiple calls
 
 - assess_arrangement: {"key": str, "scale": str, "bpm": int, "sections": list, "instruments": list} — Ask E2B model to rate the arrangement quality and suggest improvements.
@@ -228,7 +238,11 @@ Examples:
    "create an EDM banger" → {"tool":"create_genre_project","args":{"genre":"electronic"}}
    "new project with drums and bass" → {"tool":"create_genre_project","args":{"genre":"rock","custom_instruments":["drums","bass"]}}
    "create a pop song with piano and strings at 100 bpm" → {"tool":"create_genre_project","args":{"genre":"pop","tempo":100,"custom_instruments":["keys","strings"]}}
-   "create a metal project with a longer intro and more solos" → {"tool":"create_genre_project","args":{"genre":"metal","modifiers":{"midi_modifiers":{"lead_guitar":{"density_mod":0.2,"complexity":"lead_melody"}},"section_changes":[{"name":"Solo","bars":8,"action":"add"}]}}}
+   "create a metal project with a longer intro and more solos" → {"tool":"create_genre_project","args":{"genre":"metal","modifiers":{"vibe":"heavy","emphasis":["lead_guitar"],"midi_modifiers":{"lead_guitar":{"density_mod":0.2,"complexity":"lead_melody"}},"section_changes":[{"name":"Solo","bars":8,"action":"add"}]}}}
+   "create a pop song with layered strings" → {"tool":"create_genre_project","args":{"genre":"pop","modifiers":{"vibe":"anthemic","emphasis":["strings","vocals"]}}}
+   "heavy metal with more cowbell at 180bpm" → {"tool":"create_genre_project","args":{"genre":"metal","tempo":180,"custom_instruments":["cowbell"],"modifiers":{"vibe":"heavy","emphasis":["cowbell","lead_guitar"],"midi_modifiers":{"cowbell":{"density_mod":0.3,"complexity":"standard"}}}}}
+   "chill ambient track" → {"tool":"create_genre_project","args":{"genre":"ambient","modifiers":{"vibe":"chill","energy":"low"}}}
+   "anthemic rock" → {"tool":"create_genre_project","args":{"genre":"rock","modifiers":{"vibe":"anthemic","energy":"high","emphasis":["vocals","lead_guitar"]}}}
    "create project in D minor with drums bass melody, verse chorus verse" → {"tool":"generate_project","args":{"sections":[{"name":"Verse","bars":16},{"name":"Chorus","bars":8},{"name":"Verse","bars":16}],"instruments":["drums","bass","melody"],"key":"D","scale":"minor","bpm":120}}
   "set tempo 140 and play" → [{"tool":"set_tempo","args":{"bpm":140}},{"tool":"transport_control","args":{"action":"play"}}]
   "more reverb on track 2" → {"tool":"fx_set_wetdry","args":{"track":2,"fx":0,"value":0.8}}

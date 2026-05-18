@@ -1,4 +1,4 @@
--- AudioShuttle Watcher v5 — MIDI import + markers + colors
+-- AudioShuttle Watcher v6 — MIDI import + markers + colors + routing + batch ops
 COMM_DIR = "/home/korphaus/audioshuttle/communication/"
 TMP_DIR = "/tmp/"
 tick = 0
@@ -10,7 +10,19 @@ end
 function fexists(p) local f = io.open(p, "r"); if f then f:close(); return true end; return false end
 function fread(p) local f = io.open(p, "r"); if not f then return nil end; local c = f:read("*all"); f:close(); return c end
 function frm(p) os.remove(p) end
-function fwrite(p, c) local f = io.open(p, "w"); if not f then return false end; f:write(c); f:close(); return true end
+function fwrite(p, c)
+    local f = io.open(p, "w")
+    if not f then
+        -- File might be owned by another user with restrictive perms.
+        -- Remove it and try again (works if directory is writable).
+        os.remove(p)
+        f = io.open(p, "w")
+    end
+    if not f then return false end
+    f:write(c)
+    f:close()
+    return true
+end
 
 -- ============================================================
 -- HANDLERS
@@ -125,10 +137,17 @@ function handle_import_trigger(content)
         if not midi_path then midi_path = TMP_DIR .. "audioshuttle_pattern.mid" end
     end
     if not fexists(midi_path) then log("IMPORT: no file " .. tostring(midi_path)); return end
-    -- InsertMedia(mode=0) always puts items on track 1 regardless of selection.
-    -- Strategy: insert on track 1, then move to target track.
+    -- InsertMedia(mode=0) inserts at edit cursor on first selected track.
+    -- Strategy: select only track 1, insert, then move to target track.
     local t1 = reaper.GetTrack(0, 0)
     if not t1 then log("IMPORT: no track 1"); return end
+
+    -- Deselect all tracks, then select only track 1
+    for i = 0, reaper.CountTracks(0) - 1 do
+        reaper.SetTrackSelected(reaper.GetTrack(0, i), false)
+    end
+    reaper.SetTrackSelected(t1, true)
+
     local before = reaper.CountTrackMediaItems(t1)
     reaper.SetEditCurPos(0, false, false)
     reaper.InsertMedia(midi_path, 0)
@@ -250,6 +269,145 @@ function handle_fx_list_request(content)
 end
 
 -- ============================================================
+-- v6 NEW HANDLERS: Batch name/color, Send routing, Batch import
+-- ============================================================
+
+function handle_name_trigger(content)
+    -- Format: "track_num:name" (one at a time)
+    -- Example: "3:Lead Guitar"
+    local tn, name = string.match(content, "(%d+):(.+)")
+    if not tn or not name then return end
+    local track = reaper.GetTrack(0, tonumber(tn) - 1)
+    if not track then return end
+    reaper.GetSetMediaTrackInfo_String(track, "P_NAME", name, true)
+    log("NAME track " .. tn .. " = " .. name)
+end
+
+function handle_send_trigger(content)
+    -- Format: "source_track:dest_track:volume"
+    -- Routes source track's output to dest track (bus)
+    -- Example: "3:7:1.0" = route track 3 → track 7 at unity volume
+    local sn, dn, vol = string.match(content, "(%d+):(%d+):(.+)")
+    if not sn or not dn then return end
+    local src = reaper.GetTrack(0, tonumber(sn) - 1)
+    local dst = reaper.GetTrack(0, tonumber(dn) - 1)
+    if not src or not dst then return end
+    local v = tonumber(vol) or 1.0
+    -- Create hardware send from source to destination track
+    local send_idx = reaper.CreateTrackSend(src, dst)
+    if send_idx >= 0 then
+        -- Set send volume (0..1 range for normalized, but we pass as linear)
+        reaper.SetTrackSendInfo_Value(src, 0, send_idx, "D_VOL", v)
+        -- Mute the source track's master send so it only goes to the bus
+        reaper.SetMediaTrackInfo_Value(src, "B_MAINSEND", 0)
+        log("SEND t" .. sn .. " -> t" .. dn .. " vol=" .. tostring(v))
+    else
+        log("SEND FAIL: t" .. sn .. " -> t" .. dn)
+    end
+end
+
+function handle_batch_trigger(content)
+    -- Format: JSON-like with semicolon-separated entries
+    -- Each entry: "op:args"
+    -- Ops: "i" = insert tracks, "n" = name, "c" = color, "s" = send, "f" = fx add
+    -- Example: "i:12;n:1:Drums;n:2:Bass;n:3:Lead Guitar;n:4:Guitars Bus;n:5:Submaster;c:1:#ff4444;c:2:#44ff44;c:3:#4444ff;c:4:#888888;c:5:#ffffff;s:3:4:1.0;s:4:5:1.0;f:1:ReaSynth"
+    log("BATCH: " .. content)
+    local results = {}
+    for entry in string.gmatch(content, "([^;]+)") do
+        local parts = {}
+        for p in string.gmatch(entry, "([^:]+)") do table.insert(parts, p) end
+        if #parts >= 1 then
+            local op = parts[1]
+            if op == "i" and #parts >= 2 then
+                -- Insert N tracks
+                local c = tonumber(parts[2])
+                if c and c > 0 then
+                    for i = 1, c do reaper.InsertTrackAtIndex(c - i, true) end
+                    results[#results+1] = "i:" .. c .. "=ok"
+                end
+            elseif op == "n" and #parts >= 3 then
+                -- Name track
+                local tn = tonumber(parts[2])
+                local name = parts[3]
+                if tn then
+                    local track = reaper.GetTrack(0, tn - 1)
+                    if track then
+                        reaper.GetSetMediaTrackInfo_String(track, "P_NAME", name, true)
+                        results[#results+1] = "n:" .. tn .. "=ok"
+                    end
+                end
+            elseif op == "c" and #parts >= 3 then
+                -- Color track
+                local tn = tonumber(parts[2])
+                local ch = parts[3]
+                if tn and #ch == 6 then
+                    local track = reaper.GetTrack(0, tn - 1)
+                    if track then
+                        local r = tonumber(string.sub(ch, 1, 2), 16)
+                        local g = tonumber(string.sub(ch, 3, 4), 16)
+                        local b = tonumber(string.sub(ch, 5, 6), 16)
+                        reaper.SetTrackColor(track, reaper.ColorToNative(r, g, b) | 0x1000000)
+                        results[#results+1] = "c:" .. tn .. "=ok"
+                    end
+                end
+            elseif op == "s" and #parts >= 4 then
+                -- Send routing
+                local sn = tonumber(parts[2])
+                local dn = tonumber(parts[3])
+                local vol = tonumber(parts[4]) or 1.0
+                if sn and dn then
+                    local src = reaper.GetTrack(0, sn - 1)
+                    local dst = reaper.GetTrack(0, dn - 1)
+                    if src and dst then
+                        local send_idx = reaper.CreateTrackSend(src, dst)
+                        if send_idx >= 0 then
+                            reaper.SetTrackSendInfo_Value(src, 0, send_idx, "D_VOL", vol)
+                            reaper.SetMediaTrackInfo_Value(src, "B_MAINSEND", 0)
+                            results[#results+1] = "s:" .. sn .. "->" .. dn .. "=ok"
+                        end
+                    end
+                end
+            elseif op == "f" and #parts >= 3 then
+                -- Add FX
+                local tn = tonumber(parts[2])
+                local fx_name = parts[3]
+                if tn then
+                    local track = reaper.GetTrack(0, tn - 1)
+                    if track then
+                        local idx = reaper.TrackFX_AddByName(track, fx_name, false, -1)
+                        results[#results+1] = "f:" .. tn .. "=" .. (idx >= 0 and "ok" or "fail")
+                    end
+                end
+            elseif op == "v" and #parts >= 3 then
+                -- Set track volume (0..1 range maps to Reaper's 0..4 linear)
+                local tn = tonumber(parts[2])
+                local vol = tonumber(parts[3])
+                if tn and vol then
+                    local track = reaper.GetTrack(0, tn - 1)
+                    if track then
+                        reaper.SetMediaTrackInfo_Value(track, "D_VOL", vol)
+                        results[#results+1] = "v:" .. tn .. "=ok"
+                    end
+                end
+            end
+        end
+    end
+    fwrite(COMM_DIR .. "audioshuttle_batch_result.txt", table.concat(results, ";"))
+    log("BATCH done: " .. #results .. " ops")
+end
+
+function handle_master_send_trigger(content)
+    -- Format: "track_num:0_or_1" — enable/disable master send
+    -- Use to mute/unmute a track's direct output to master
+    local tn, val = string.match(content, "(%d+):(%d+)")
+    if not tn or not val then return end
+    local track = reaper.GetTrack(0, tonumber(tn) - 1)
+    if not track then return end
+    reaper.SetMediaTrackInfo_Value(track, "B_MAINSEND", tonumber(val))
+    log("MASTER_SEND track " .. tn .. " = " .. val)
+end
+
+-- ============================================================
 -- MAIN LOOP
 -- ============================================================
 
@@ -268,21 +426,36 @@ end
 
 function main_loop()
     tick = tick + 1
-    fwrite(COMM_DIR .. "audioshuttle_watcher_alive", "tick=" .. tick)
-    process_trigger("audioshuttle_wipe_trigger", handle_wipe_trigger, function(c) return c == "wipe" end)
-    process_trigger("audioshuttle_state_request", handle_state_request, function(c) return c == "dump" end)
-    process_trigger("audioshuttle_markers_trigger", handle_markers_trigger)
-    process_trigger("audioshuttle_clear_trigger", handle_clear_trigger)
-    process_trigger("audioshuttle_track_insert_trigger", handle_track_insert_trigger)
-    process_trigger("audioshuttle_import_trigger", handle_import_trigger)
-    process_trigger("audioshuttle_color_cmd.txt", handle_color_trigger)
-    process_trigger("audioshuttle_fx_trigger", handle_fx_trigger)
-    process_trigger("audioshuttle_fx_list_request", handle_fx_list_request)
+    -- Wrap all trigger processing in pcall so a single error
+    -- doesn't break the reaper.defer chain permanently
+    local ok, err = pcall(function()
+        -- Ensure communication dir is writable (permissions can drift)
+        os.execute("chmod 777 " .. COMM_DIR .. " 2>/dev/null")
+        fwrite(COMM_DIR .. "audioshuttle_watcher_alive", "tick=" .. tick)
+        -- Fix permissions on alive file so container (root) can't lock us out
+        os.execute("chmod 666 " .. COMM_DIR .. "audioshuttle_watcher_alive 2>/dev/null")
+        process_trigger("audioshuttle_wipe_trigger", handle_wipe_trigger, function(c) return c == "wipe" end)
+        process_trigger("audioshuttle_state_request", handle_state_request, function(c) return c == "dump" end)
+        process_trigger("audioshuttle_markers_trigger", handle_markers_trigger)
+        process_trigger("audioshuttle_clear_trigger", handle_clear_trigger)
+        process_trigger("audioshuttle_track_insert_trigger", handle_track_insert_trigger)
+        process_trigger("audioshuttle_import_trigger", handle_import_trigger)
+        process_trigger("audioshuttle_color_cmd.txt", handle_color_trigger)
+        process_trigger("audioshuttle_fx_trigger", handle_fx_trigger)
+        process_trigger("audioshuttle_fx_list_request", handle_fx_list_request)
+        -- v6 triggers: batch ops, naming, routing
+        process_trigger("audioshuttle_name_trigger", handle_name_trigger)
+        process_trigger("audioshuttle_send_trigger", handle_send_trigger)
+        process_trigger("audioshuttle_batch_trigger", handle_batch_trigger)
+        process_trigger("audioshuttle_master_send_trigger", handle_master_send_trigger)
+    end)
+    if not ok then log("MAIN LOOP ERROR: " .. tostring(err)) end
+    -- ALWAYS re-defer, even on error — keeps the watcher alive
     reaper.defer(main_loop)
 end
 
 os.execute("mkdir -p " .. COMM_DIR .. " && chmod 777 " .. COMM_DIR)
 local f = io.open("/tmp/watcher_debug.log", "w")
-if f then f:write("WATCHER v5 STARTED\n"); f:close() end
+if f then f:write("WATCHER v6 STARTED\n"); f:close() end
 tick = 0
 reaper.defer(main_loop)

@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     kbd \
     procps \
     libportaudio2 \
+    libasound2-plugins \
     alsa-utils \
     ffmpeg \
     libsndfile1 \

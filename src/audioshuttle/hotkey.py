@@ -125,6 +125,8 @@ class VoiceHotkey:
             return
         self._recording = True
         self._audio_chunks = []
+        self._recording_mode = None  # 'sounddevice' or 'arecord'
+        self._arecord_proc = None
 
         # Show overlay (thread-safe via signals)
         if self._overlay:
@@ -133,37 +135,104 @@ class VoiceHotkey:
             except Exception:
                 pass
 
+        # Try sounddevice first (works when PulseAudio/PipeWire exposes mic)
         try:
             import sounddevice as sd
 
-            def callback(indata, frames, time_info, status):
-                if self._recording:
-                    self._audio_chunks.append(indata.tobytes())
+            # Check if any PortAudio input device exists
+            has_input = False
+            for dev in sd.query_devices():
+                if dev.get("max_input_channels", 0) > 0:
+                    has_input = True
+                    break
 
-            self._stream = sd.InputStream(
-                samplerate=self._sample_rate,
-                channels=1,
-                dtype="int16",
-                callback=callback,
-            )
-            self._stream.start()
-            logger.debug("Recording started at %d Hz", self._sample_rate)
+            if has_input:
+                def callback(indata, frames, time_info, status):
+                    if self._recording:
+                        self._audio_chunks.append(indata.tobytes())
+
+                self._stream = sd.InputStream(
+                    samplerate=self._sample_rate,
+                    channels=1,
+                    dtype="int16",
+                    callback=callback,
+                )
+                self._stream.start()
+                self._recording_mode = "sounddevice"
+                logger.debug("Recording via sounddevice at %d Hz", self._sample_rate)
+                return
         except ImportError:
-            logger.warning("sounddevice not installed — cannot record from mic")
-            self._recording = False
-            if self._overlay:
-                try:
-                    self._overlay.signals.show_error.emit("No mic access", 3000)
-                except Exception:
-                    pass
+            logger.debug("sounddevice not installed")
         except Exception as e:
-            logger.error("Failed to start recording: %s", e)
-            self._recording = False
-            if self._overlay:
-                try:
-                    self._overlay.signals.show_error.emit(str(e), 3000)
-                except Exception:
-                    pass
+            logger.debug("sounddevice capture failed: %s", e)
+
+        # Fallback: use arecord subprocess for raw ALSA capture
+        try:
+            alsa_dev = self._find_alsa_capture_device()
+            if alsa_dev:
+                import subprocess
+                self._arecord_proc = subprocess.Popen(
+                    [
+                        "arecord",
+                        "-D", alsa_dev,
+                        "-f", "S16_LE",     # 16-bit
+                        "-c", "1",           # mono
+                        "-r", str(self._sample_rate),
+                        "--buffer-size=16000",
+                        "-",                 # stdout
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                self._recording_mode = "arecord"
+
+                # Read arecord output in a background thread
+                def read_arecord():
+                    try:
+                        while self._recording and self._arecord_proc:
+                            chunk = self._arecord_proc.stdout.read(3200)  # 100ms at 16kHz mono 16-bit
+                            if not chunk:
+                                break
+                            self._audio_chunks.append(chunk)
+                    except Exception:
+                        pass
+
+                t = threading.Thread(target=read_arecord, daemon=True)
+                t.start()
+                logger.info("Recording via arecord on %s at %d Hz", alsa_dev, self._sample_rate)
+                return
+        except Exception as e:
+            logger.error("arecord capture also failed: %s", e)
+
+        # Nothing worked
+        self._recording = False
+        logger.error("No microphone available (sounddevice and arecord both failed)")
+        if self._overlay:
+            try:
+                self._overlay.signals.show_error.emit("No mic found", 3000)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _find_alsa_capture_device() -> str | None:
+        """Find an ALSA hw capture device via arecord -l.
+
+        Returns device string like 'hw:2,0' or None.
+        """
+        import subprocess
+        import re
+        try:
+            result = subprocess.run(
+                ["arecord", "-l"], capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                if "card" in line and "device" in line:
+                    m = re.match(r"card (\d+): .+ device (\d+):", line)
+                    if m:
+                        return f"hw:{m.group(1)},{m.group(2)}"
+        except Exception as e:
+            logger.debug("arecord scan failed: %s", e)
+        return None
 
     def _stop_recording(self) -> None:
         """Stop recording and process the audio."""
@@ -171,13 +240,27 @@ class VoiceHotkey:
             return
         self._recording = False
 
-        try:
-            if hasattr(self, "_stream") and self._stream:
-                self._stream.stop()
-                self._stream.close()
-                self._stream = None
-        except Exception:
-            pass
+        # Stop the appropriate recording backend
+        if self._recording_mode == "sounddevice":
+            try:
+                if hasattr(self, "_stream") and self._stream:
+                    self._stream.stop()
+                    self._stream.close()
+                    self._stream = None
+            except Exception:
+                pass
+        elif self._recording_mode == "arecord":
+            try:
+                if self._arecord_proc:
+                    self._arecord_proc.terminate()
+                    self._arecord_proc.wait(timeout=2)
+                    # Read any remaining data
+                    remaining = self._arecord_proc.stdout.read()
+                    if remaining:
+                        self._audio_chunks.append(remaining)
+                    self._arecord_proc = None
+            except Exception:
+                pass
 
         if not self._audio_chunks:
             logger.debug("No audio recorded")

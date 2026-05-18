@@ -30,7 +30,7 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
             float(args.get("position_seconds", 0))
         ),
         "set_track_volume": lambda: bridge.set_track_volume(
-            int(args["track"]), float(args["volume"])
+            int(args["track"]), float(args.get("value", args.get("volume", 1.0)))
         ),
         "set_track_mute": lambda: bridge.set_track_mute(
             int(args["track"]), bool(args["mute"])
@@ -42,7 +42,7 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
             int(args["track"]), float(args["pan"])
         ),
         "set_master_volume": lambda: bridge.set_master_volume(
-            float(args["volume"])
+            float(args.get("value", args.get("volume", 1.0)))
         ),
         "set_master_pan": lambda: bridge.set_master_pan(
             float(args["pan"])
@@ -117,7 +117,8 @@ def _execute_tool(bridge: Any, tool: str, args: dict) -> Any:
             int(args["track"]), str(args["mode"]),
         ),
         "set_track_send_volume": lambda: bridge.set_track_send_volume(
-            int(args["track"]), int(args["send"]), float(args["volume"]),
+            int(args["track"]), int(args["send"]),
+            float(args.get("value", args.get("volume", 1.0))),
         ),
         "goto_marker": lambda: bridge.goto_marker(int(args["marker"])),
         "set_marker_name": lambda: bridge.set_marker_name(
@@ -233,8 +234,17 @@ class VoicePipeline:
             # Step 1: STT
             raw_text = ""
             try:
+                # Build context hints from current DAW state (track names)
+                context_hints = None
+                if self._bridge and hasattr(self._bridge, 'state'):
+                    state = self._bridge.state
+                    if hasattr(state, 'tracks') and state.tracks:
+                        context_hints = [
+                            t.name for t in state.tracks if t.name
+                        ]
+
                 if hasattr(self, "_gemma_audio") and self._gemma_audio.is_available:
-                    raw_text = self._gemma_audio.transcribe(tmp_path)
+                    raw_text = self._gemma_audio.transcribe(tmp_path, context_hints=context_hints)
                     if raw_text:
                         logger.info("E4B transcription: %r", raw_text)
                 
@@ -457,7 +467,12 @@ class VoicePipeline:
             "ability to track→a melody track, add a melody→add a melody, "
             "medley→melody, melo→melody, riddum→rhythm, middy→midi, "
             "mid if→midi, base→bass, bas→bass, cords→chords.\n"
-            "Use track names from context if the transcription says 'guitar' or 'drums'.\n"
+            "IMPORTANT: Use track/bus names from the context list below. "
+            "If the raw text mentions a track that sounds similar to one in the context, "
+            "use the exact name from context. "
+            "e.g. 'bass' near 'guitars bus' → 'guitars bus', "
+            "'lead guitar' when context has 'rhythm guitar 1' → 'rhythm guitar 1', "
+            "'base' → check context for 'bass' track name first.\n"
             f"{state_context}\n\n"
             f"Raw: '{raw_text}'"
         )

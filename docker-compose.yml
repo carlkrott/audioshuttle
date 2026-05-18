@@ -68,6 +68,7 @@ services:
     privileged: true
     group_add:
       - "992"
+      - "995"   # host audio group — needed for SSL 12 capture device (/dev/snd/pcmC2D0c)
     volumes:
       # Share /tmp with host so the watcher state file is accessible
       # The Reaper Lua watcher writes to /tmp/audioshuttle_daw_state.json
@@ -93,6 +94,7 @@ services:
       - XAUTHORITY=/home/audioshuttle/.Xauthority
       - WAYLAND_DISPLAY=wayland-0
       - XDG_RUNTIME_DIR=/run/user/1000
+      - PULSE_SERVER=unix:/run/user/1000/pulse/native
       - QT_QPA_PLATFORM=wayland
     env_file: .env
     stdin_open: true

@@ -819,6 +819,107 @@ class ReaperOSC:
                 return True
         return False
 
+    def _send_lua_trigger(
+        self,
+        trigger_name: str,
+        content: str,
+        wait: float = 2.0,
+        expect_result: str | None = None,
+    ) -> str | None:
+        """Write a trigger file and wait for it to be consumed.
+
+        Args:
+            trigger_name: Filename in /communication/ (e.g. "audioshuttle_name_trigger")
+            content: Content to write to the trigger file
+            wait: Max seconds to wait for consumption
+            expect_result: Optional result filename to wait for (e.g. "audioshuttle_batch_result.txt")
+
+        Returns:
+            Result content if expect_result given and found, else None.
+            Returns "" if trigger consumed but no result expected.
+        """
+        trigger_path = f"/communication/{trigger_name}"
+        try:
+            os.remove(trigger_path)
+        except OSError:
+            pass
+        if expect_result:
+            try:
+                os.remove(f"/communication/{expect_result}")
+            except OSError:
+                pass
+
+        with open(trigger_path, "w") as f:
+            f.write(content)
+        self._chown_to_reaper(trigger_path)
+
+        # Wait for trigger to be consumed
+        consumed = False
+        for _ in range(int(wait / 0.1)):
+            time.sleep(0.1)
+            if not os.path.exists(trigger_path):
+                consumed = True
+                break
+
+        if not consumed:
+            return None
+
+        # If a result file is expected, wait for it
+        if expect_result:
+            result_path = f"/communication/{expect_result}"
+            for _ in range(int(wait / 0.1)):
+                time.sleep(0.1)
+                if os.path.exists(result_path):
+                    with open(result_path, "r") as f:
+                        return f.read()
+            return None
+
+        return ""
+
+    def _name_track_via_lua(self, track_num: int, name: str) -> bool:
+        """Name a track via Lua watcher."""
+        result = self._send_lua_trigger(
+            "audioshuttle_name_trigger",
+            f"{track_num}:{name}",
+            wait=1.5,
+        )
+        return result is not None
+
+    def _route_via_lua(self, source: int, dest: int, volume: float = 1.0) -> bool:
+        """Route source track output to dest track (bus) via Lua watcher."""
+        result = self._send_lua_trigger(
+            "audioshuttle_send_trigger",
+            f"{source}:{dest}:{volume}",
+            wait=1.5,
+        )
+        return result is not None
+
+    def _set_master_send(self, track_num: int, enabled: bool) -> bool:
+        """Enable/disable a track's master send."""
+        result = self._send_lua_trigger(
+            "audioshuttle_master_send_trigger",
+            f"{track_num}:{1 if enabled else 0}",
+            wait=1.5,
+        )
+        return result is not None
+
+    def _batch_via_lua(self, ops: list[str]) -> str | None:
+        """Execute a batch of operations via single Lua trigger.
+
+        Args:
+            ops: List of operation strings (e.g. ["i:8", "n:1:Drums", "c:1:#ff0000"])
+
+        Returns:
+            Result string from Lua, or None on failure.
+        """
+        content = ";".join(ops)
+        return self._send_lua_trigger(
+            "audioshuttle_batch_trigger",
+            content,
+            wait=5.0,
+            expect_result="audioshuttle_batch_result.txt",
+        )
+
     def create_song_structure(
         self,
         sections: list[dict[str, str | int]],
@@ -961,35 +1062,26 @@ class ReaperOSC:
         results: list[str] = []
 
         def _watcher_alive() -> bool:
-            """Check if Lua watcher defer loop is still running."""
+            """Check if Lua watcher defer loop is still running.
+            
+            Uses mtime freshness only — the previous tick-monotonic check
+            caused false negatives when two reads landed on the same tick
+            (watcher busy processing a trigger), killing the entire pipeline.
+            """
             try:
                 alive_path = "/communication/audioshuttle_watcher_alive"
                 if not os.path.exists(alive_path):
                     return False
                 mtime = os.path.getmtime(alive_path)
-                if (time.time() - mtime) > 15.0:
-                    # Stale — retry once after 3s
-                    _time.sleep(3.0)
-                    if not os.path.exists(alive_path):
-                        return False
-                    mtime = os.path.getmtime(alive_path)
-                    if (time.time() - mtime) > 15.0:
-                        return False
-                # Secondary: check tick counter monotonic increase
-                try:
-                    with open(alive_path, "r") as f:
-                        content = f.read()
-                    if "tick=" in content:
-                        parts = content.split("tick=")
-                        if len(parts) >= 2:
-                            current_tick = int(parts[1].split()[0].strip())
-                            if hasattr(_watcher_alive, "_last_tick"):
-                                if current_tick <= _watcher_alive._last_tick:
-                                    return False
-                            _watcher_alive._last_tick = current_tick
-                except (OSError, ValueError):
-                    pass
-                return True
+                age = time.time() - mtime
+                if age < 30.0:
+                    return True
+                # Stale — retry once after 2s
+                _time.sleep(2.0)
+                if not os.path.exists(alive_path):
+                    return False
+                mtime = os.path.getmtime(alive_path)
+                return (time.time() - mtime) < 30.0
             except OSError:
                 return False
 
@@ -1248,6 +1340,8 @@ class ReaperOSC:
     ) -> CommandResult:
         """Create a complete genre-aware Reaper project with bus routing and FX chains.
 
+        Uses the arrangement engine for instrument expansion and section layering.
+
         Pipeline: tempo → markers → tracks → buses → plugins → MIDI → FX → routing → verify
 
         Args:
@@ -1263,17 +1357,20 @@ class ReaperOSC:
         import time as _time
         import json as _json
 
-        # ── Step 0: Genre resolution ─────────────────────────────────
+        # ── Step 0: Genre resolution + instrument expansion ──────────
         try:
             from audioshuttle.genre_profiles import (
                 get_genre, get_family, get_fx_chain, get_tempo,
                 get_bus_fx_chain, SUBMASTER_FX_CHAIN,
                 INSTRUMENT_FAMILIES, compute_instrument_grouping,
                 resolve_genre_profile, get_grouping_strategy,
-                get_track_color, get_bus_color,
+                get_track_color, get_bus_color, get_base_role,
+            )
+            from audioshuttle.arrangement_engine import (
+                expand_instruments, resolve_section_layers, compute_bus_topology,
+                INSTRUMENT_VARIANTS, DEFAULT_VARIANT, SECTION_LAYERS,
             )
 
-            # ── Step 0b: Resolve profile with hierarchy & modifiers ────────
             resolved_profile = resolve_genre_profile(genre, custom_instruments)
             profile = resolved_profile
             resolved_tempo = get_tempo(genre, tempo)
@@ -1281,26 +1378,32 @@ class ReaperOSC:
             sections = custom_sections or profile["sections"]
             effective_genre = profile.get("resolved_genre", genre)
 
-            logger.info(
-                "create_genre_project: genre=%s (strategy=%s) tempo=%d instruments=%s sections=%s",
-                effective_genre, get_grouping_strategy(effective_genre), resolved_tempo, instruments,
-                [(s["name"], s["bars"]) for s in sections],
+            players = expand_instruments(
+                base_instruments=instruments,
+                genre=effective_genre,
+                custom_instruments=custom_instruments,
+                user_doubles=None,
             )
 
-            # Compute bus groupings with dynamic grouping system
-            computed_buses = compute_instrument_grouping(
-                instruments=instruments,
-                genre=effective_genre,
-                explicit_buses=None,  # TODO: hook in user/LLM overrides via custom_instruments metadata
+            buses = compute_bus_topology(players, effective_genre)
+            bus_names = [b for b in buses.keys() if b != "Submaster"]
+
+            logger.info(
+                "create_genre_project: genre=%s (strategy=%s) tempo=%d players=%d "
+                "sections=%s buses=%s",
+                effective_genre, get_grouping_strategy(effective_genre), resolved_tempo,
+                len(players),
+                [(s["name"], s["bars"]) for s in sections],
+                bus_names,
             )
         except ImportError:
             return CommandResult(
                 success=False, address="/project/genre",
-                error="genre_profiles module not available",
+                error="genre_profiles or arrangement_engine module not available",
             )
 
         results: list[str] = []
-        instrument_track_map: dict[str, int] = {}
+        player_track_map: dict[str, int] = {}
         bus_track_map: dict[str, int] = {}
         submaster_idx: int | None = None
 
@@ -1311,29 +1414,14 @@ class ReaperOSC:
                 if not os.path.exists(alive_path):
                     return False
                 mtime = os.path.getmtime(alive_path)
-                if (time.time() - mtime) > 15.0:
-                    # Stale — retry once after 3s
-                    _time.sleep(3.0)
-                    if not os.path.exists(alive_path):
-                        return False
-                    mtime = os.path.getmtime(alive_path)
-                    if (time.time() - mtime) > 15.0:
-                        return False
-                # Secondary: check tick counter monotonic increase
-                try:
-                    with open(alive_path, "r") as f:
-                        content = f.read()
-                    if "tick=" in content:
-                        parts = content.split("tick=")
-                        if len(parts) >= 2:
-                            current_tick = int(parts[1].split()[0].strip())
-                            if hasattr(_watcher_alive, "_last_tick"):
-                                if current_tick <= _watcher_alive._last_tick:
-                                    return False
-                            _watcher_alive._last_tick = current_tick
-                except (OSError, ValueError):
-                    pass
-                return True
+                age = time.time() - mtime
+                if age < 30.0:
+                    return True
+                _time.sleep(2.0)
+                if not os.path.exists(alive_path):
+                    return False
+                mtime = os.path.getmtime(alive_path)
+                return (time.time() - mtime) < 30.0
             except OSError:
                 return False
 
@@ -1353,9 +1441,11 @@ class ReaperOSC:
         ) -> bool:
             """Verify DAW state matches expectations. Returns True if OK."""
             try:
-                self.refresh_state(wait=0.5)
+                state_obj = self.refresh_state(wait=2.5)
+                if state_obj is None:
+                    state_obj = self._state
+                actual_tracks = getattr(state_obj, "track_count", 0) if state_obj else 0
                 state_data = _read_daw_state_json()
-                actual_tracks = state_data.get("track_count", 0)
                 actual_markers = len(state_data.get("markers", []))
                 if actual_tracks < expected_tracks:
                     logger.warning(
@@ -1442,19 +1532,19 @@ class ReaperOSC:
             _time.sleep(0.5)
             _verify_project_state(0, len(sections), "Step 2: markers")
 
-            # ── Step 3: Create instrument tracks ───────────────────────
-            num_instruments = len(instruments)
-            # Get current track count BEFORE insertion
+            # ── Step 3: Create ALL tracks in one batch ──────────────────
+            num_players = len(players)
+            total_tracks = num_players + len(bus_names) + 1  # +1 for submaster
+
             self.refresh_state(wait=0.3)
             pre_insertion_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
-            
-            inserted = self._insert_tracks_via_lua(count=num_instruments, wait=2.0)
+
+            inserted = self._insert_tracks_via_lua(count=total_tracks, wait=5.0)
             if not inserted:
-                logger.warning("create_genre_project: track insert trigger not consumed")
-            
-            # Wait for all tracks to be created (Lua watcher processes one per tick)
-            expected_total = pre_insertion_count + num_instruments
-            for attempt in range(30):  # up to 6s
+                logger.warning("create_genre_project: batch track insert trigger not consumed")
+
+            expected_total = pre_insertion_count + total_tracks
+            for attempt in range(60):
                 _time.sleep(0.2)
                 self.refresh_state(wait=0.2)
                 current_tracks = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
@@ -1462,64 +1552,137 @@ class ReaperOSC:
                     break
                 if attempt % 5 == 4:
                     logger.info("create_genre_project: waiting for tracks... %d/%d", current_tracks, expected_total)
-            
-            # Update base_track_count to actual count after insertion
+
             base_track_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
-            results.append(f"Tracks: {num_instruments} instruments")
+            results.append(f"Tracks: {num_players} players + {len(bus_names)} buses + Submaster")
 
-            # Populate instrument_track_map using PRE-insertion count
-            # (instruments start at pre_insertion_count + 1)
-            track_offset = pre_insertion_count + 1
-            for i, inst in enumerate(instruments):
-                instrument_track_map[inst] = track_offset + i
+            # ── Step 4: Name tracks + color + load plugins ──────────────
+            track_cursor = pre_insertion_count + 1
 
-            # ── Step 4: Create bus tracks + Submaster ─────────────────
-            # Only create buses for groups with >1 instrument
-            buses_to_create = [
-                bus_name for bus_name, bus_instruments in computed_buses.items()
-                if len(bus_instruments) > 1
-            ]
+            # 4a: Player tracks
+            for player in players:
+                pid = player["id"]
+                track_idx = track_cursor
+                player_track_map[pid] = track_idx
+                track_cursor += 1
 
-            # Create bus tracks
-            for bus_name in buses_to_create:
-                bus_track_num = base_track_count + len(bus_track_map) + 1
-                inserted_bus = self._insert_tracks_via_lua(count=1, wait=1.0)
-                if inserted_bus:
-                    # Wait for track to actually appear
-                    for _ in range(10):
-                        _time.sleep(0.2)
-                        self.refresh_state(wait=0.2)
-                        current = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
-                        if current >= bus_track_num:
-                            break
-                    self.rename_track(bus_track_num, f"{bus_name.capitalize()} Bus")
-                    bus_track_map[bus_name] = bus_track_num
-                    logger.info("create_genre_project: created bus track %s at T%d", bus_name.capitalize(), bus_track_num)
+                display_name = player["display_name"]
+                self.rename_track(track_idx, display_name)
+                _time.sleep(0.2)
 
-            # Create Submaster
-            sub_track_num = base_track_count + len(bus_track_map) + 1
-            inserted_sub = self._insert_tracks_via_lua(count=1, wait=1.0)
-            if inserted_sub:
-                # Wait for track to actually appear
-                for _ in range(10):
-                    _time.sleep(0.2)
-                    self.refresh_state(wait=0.2)
-                    current = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
-                    if current >= sub_track_num:
-                        break
-                self.rename_track(sub_track_num, "Submaster")
-                submaster_idx = sub_track_num
-                logger.info("create_genre_project: created Submaster at track %d", sub_track_num)
+                base_role = player["base_role"]
+                override_plugin = getattr(self, '_plugin_overrides', {}).get(base_role, None)
+                plugin_name = override_plugin or self._INSTRUMENT_PLUGINS.get(base_role)
+                if plugin_name:
+                    _time.sleep(0.3)
+                    fx_result = self._fx_trigger("add", track_idx, plugin_name, wait=4.0)
+                    if fx_result.get("success"):
+                        logger.info(
+                            "create_genre_project: loaded %s on track %d (%s)",
+                            plugin_name, track_idx, display_name,
+                        )
+                    else:
+                        logger.warning(
+                            "create_genre_project: failed to load %s on track %d",
+                            plugin_name, track_idx,
+                        )
+                _time.sleep(0.2)
 
-            _time.sleep(0.5)
-            expected_total = pre_insertion_count + num_instruments + len(bus_track_map) + 1
-            _verify_project_state(expected_total, len(sections), "Step 4: buses")
-            results.append(f"Buses: {list(bus_track_map.keys())}")
+            # 4b: Bus tracks
+            for bus_name in bus_names:
+                track_idx = track_cursor
+                bus_track_map[bus_name] = track_idx
+                track_cursor += 1
 
-            # ── Step 4b: Remove stray tracks (unnamed extras beyond expected) ──
+                self.rename_track(track_idx, f"{bus_name} Bus")
+                _time.sleep(0.2)
+                color = get_bus_color(bus_name)
+                self.set_track_color(track_idx, f"#{color}")
+                logger.info(
+                    "create_genre_project: colored %s Bus (T%d) #%s",
+                    bus_name, track_idx, color,
+                )
+                _time.sleep(0.3)
+
+            # 4c: Submaster track
+            submaster_idx = track_cursor
+            track_cursor += 1
+            self.rename_track(submaster_idx, "Submaster")
+            sub_color = get_bus_color("Submaster")
+            self.set_track_color(submaster_idx, f"#{sub_color}")
+            logger.info("create_genre_project: colored Submaster #%s", sub_color)
+            _time.sleep(0.3)
+
+            # 4d: Color player tracks
+            player_to_bus: dict[str, str] = {}
+            for bus_name, pids in buses.items():
+                if bus_name == "Submaster":
+                    continue
+                for pid in pids:
+                    player_to_bus[pid] = bus_name
+
+            for player in players:
+                pid = player["id"]
+                track_idx = player_track_map[pid]
+                bus_name = player_to_bus.get(pid)
+                color = get_track_color(player["base_role"], bus_name)
+                self.set_track_color(track_idx, f"#{color}")
+                logger.info(
+                    "create_genre_project: colored %s (T%d) #%s (bus=%s)",
+                    pid, track_idx, color, bus_name or "solo",
+                )
+                _time.sleep(0.3)
+
+            results.append("Colors applied")
+
+            # ── Step 4d: Route players → buses → Submaster ─────────────
+            # Build a map of which bus each player belongs to
+            player_to_bus_name: dict[str, str | None] = {}
+            for bus_name_loop, member_ids in buses.items():
+                if bus_name_loop == "Submaster":
+                    continue
+                for pid in member_ids:
+                    player_to_bus_name[pid] = bus_name_loop
+
+            for player in players:
+                pid = player["id"]
+                track_idx = player_track_map[pid]
+                bus_name = player_to_bus_name.get(pid)
+
+                if bus_name and bus_name in bus_track_map:
+                    # Route player → bus
+                    bus_track = bus_track_map[bus_name]
+                    self._route_via_lua(track_idx, bus_track, volume=1.0)
+                    logger.info(
+                        "create_genre_project: routed %s (T%d) → %s bus (T%d)",
+                        pid, track_idx, bus_name, bus_track,
+                    )
+                    _time.sleep(0.3)
+                elif submaster_idx is not None:
+                    # No bus — route directly to submaster
+                    self._route_via_lua(track_idx, submaster_idx, volume=1.0)
+                    logger.info(
+                        "create_genre_project: routed %s (T%d) → Submaster (T%d)",
+                        pid, track_idx, submaster_idx,
+                    )
+                    _time.sleep(0.3)
+
+            # Route all buses → Submaster
+            if submaster_idx is not None:
+                for bus_name_loop, bus_track in bus_track_map.items():
+                    self._route_via_lua(bus_track, submaster_idx, volume=1.0)
+                    logger.info(
+                        "create_genre_project: routed %s bus (T%d) → Submaster (T%d)",
+                        bus_name_loop, bus_track, submaster_idx,
+                    )
+                    _time.sleep(0.3)
+
+            results.append(f"Routing: {len(bus_track_map)} buses → Submaster")
+
+            # ── Step 4e: Remove stray tracks ──────────────────────────────
             self.refresh_state(wait=0.2)
             actual_count = getattr(self.state, "track_count", 0) if hasattr(self, "state") and self.state else 0
-            expected_count = pre_insertion_count + num_instruments + len(bus_track_map) + 1
+            expected_count = pre_insertion_count + total_tracks
             if actual_count > expected_count:
                 logger.warning(
                     "create_genre_project: %d extra track(s) found (expected %d, got %d)",
@@ -1529,74 +1692,7 @@ class ReaperOSC:
                     self._remove_track(t)
                     _time.sleep(0.25)
 
-            # ── Step 5: Rename tracks + load instrument plugins ───────
-            for inst, track_idx in instrument_track_map.items():
-                role = inst.lower().strip()
-                # Title-case: "rhythm_guitar" → "Rhythm Guitar"
-                display_name = " ".join(
-                    w.capitalize() for w in role.replace("_", " ").split()
-                )
-                self.rename_track(track_idx, display_name)
-                _time.sleep(0.2)
-
-                # Check for E4B plugin override first
-                override_plugin = getattr(self, '_plugin_overrides', {}).get(role, None)
-                plugin_name = override_plugin or self._INSTRUMENT_PLUGINS.get(role)
-                if plugin_name:
-                    _time.sleep(0.3)
-                    fx_result = self._fx_trigger("add", track_idx, plugin_name, wait=4.0)
-                    if fx_result.get("success"):
-                        logger.info(
-                            "create_genre_project: loaded %s on track %d",
-                            plugin_name, track_idx,
-                        )
-                    else:
-                        logger.warning(
-                            "create_genre_project: failed to load %s on track %d",
-                            plugin_name, track_idx,
-                        )
-                _time.sleep(0.2)
-
-            # ── Step 5b: Color tracks by role/bus ──────────────────────
-            # Build instrument → bus mapping from computed_buses
-            instrument_to_bus: dict[str, str] = {}
-            for bus_name, bus_instruments in computed_buses.items():
-                for inst_item in bus_instruments:
-                    instrument_to_bus[inst_item] = bus_name
-
-            # Color bus tracks first
-            for bus_name, bus_track_idx in bus_track_map.items():
-                color = get_bus_color(bus_name)
-                self.set_track_color(bus_track_idx, f"#{color}")
-                logger.info(
-                    "create_genre_project: colored %s Bus (T%d) #%s",
-                    bus_name, bus_track_idx, color,
-                )
-                _time.sleep(0.3)
-
-            # Color instrument tracks
-            for inst_item, track_idx in instrument_track_map.items():
-                bus_name = instrument_to_bus.get(inst_item)
-                color = get_track_color(inst_item, bus_name)
-                self.set_track_color(track_idx, f"#{color}")
-                logger.info(
-                    "create_genre_project: colored %s (T%d) #%s (bus=%s)",
-                    inst_item, track_idx, color, bus_name or "solo",
-                )
-                _time.sleep(0.3)
-
-            # Color submaster
-            if submaster_idx is not None:
-                sub_color = get_bus_color("Submaster")
-                self.set_track_color(submaster_idx, f"#{sub_color}")
-                logger.info("create_genre_project: colored Submaster #%s", sub_color)
-                _time.sleep(0.3)
-
-            results.append("Colors applied")
-
-            # ── Step 6: Generate MIDI per section per instrument ───────
-            # Reuse the inner logic from generate_project — but just the
-            # _generate_arrangement call and MIDI write/import, not track creation
+            # ── Step 5: Generate + import MIDI per player ────────────────
             from midiutil import MIDIFile
 
             key_parsed = str(key).strip()
@@ -1623,51 +1719,48 @@ class ReaperOSC:
 
             scale_notes = self._scale_notes(key_parsed, scale_parsed)
 
-            for i, inst in enumerate(instruments):
-                track_idx = instrument_track_map[inst]
-                role = inst.lower().strip()
+            for player in players:
+                pid = player["id"]
+                track_idx = player_track_map[pid]
+                base_role = player["base_role"]
 
                 if not _watcher_alive():
                     logger.warning(
                         "create_genre_project: watcher died before MIDI for %s",
-                        role,
+                        pid,
                     )
-                    results.append(f"{role.capitalize()} (SKIPPED — watcher dead)")
+                    results.append(f"{player['display_name']} (SKIPPED — watcher dead)")
                     _time.sleep(1.0)
                     continue
 
-                # Generate MIDI
                 midi = MIDIFile(1)
                 mtrack = 0
                 midi.addTempo(mtrack, 0, resolved_tempo)
-                self._generate_arrangement(
-                    midi, mtrack, role, scale_notes, expanded, resolved_tempo,
+                self._generate_arrangement_v2(
+                    midi, mtrack, player, scale_notes, expanded, resolved_tempo,
                 )
 
                 buf = io.BytesIO()
                 midi.writeFile(buf)
-                midi_path = os.path.join(tempfile.gettempdir(), f"audioshuttle_{role}.mid")
+                midi_path = os.path.join(tempfile.gettempdir(), f"audioshuttle_{pid}.mid")
                 with open(midi_path, "wb") as f:
                     f.write(buf.getvalue())
                 os.chmod(midi_path, 0o666)
 
-                # Clear existing items before import
                 self._clear_track_items(track_idx, wait=1.0)
                 _time.sleep(0.5)
 
-                # Import via watcher trigger
                 trigger_path = "/communication/audioshuttle_import_trigger"
                 try:
                     os.remove(trigger_path)
                 except OSError:
                     pass
 
-                trigger_content = f"import:track:{track_idx}:{role}"
+                trigger_content = f"import:track:{track_idx}:{pid}"
                 with open(trigger_path, "w") as f:
                     f.write(trigger_content)
                 self._chown_to_reaper(trigger_path)
 
-                # Wait for import (up to 8s)
                 imported = False
                 for _ in range(40):
                     _time.sleep(0.2)
@@ -1676,21 +1769,25 @@ class ReaperOSC:
                         break
 
                 results.append(
-                    f"{role.capitalize()} (T{track_idx})" +
+                    f"{player['display_name']} (T{track_idx})" +
                     (" + imported" if imported else " (import timeout)")
                 )
                 logger.info(
                     "create_genre_project: MIDI %s for %s (track %d)",
-                    "imported" if imported else "TIMEOUT", role, track_idx,
+                    "imported" if imported else "TIMEOUT", pid, track_idx,
                 )
 
-                _time.sleep(1.0)  # Watcher fragility buffer
+                _time.sleep(1.0)
 
-            # ── Step 7: Apply FX chains ────────────────────────────────
-            for inst, track_idx in instrument_track_map.items():
-                role = inst.lower().strip()
+            # ── Step 6: Apply FX chains per player ───────────────────────
+            for player in players:
+                pid = player["id"]
+                track_idx = player_track_map.get(pid)
+                if track_idx is None:
+                    continue
+                base_role = player["base_role"]
                 try:
-                    fx_chain = get_fx_chain(role, genre)
+                    fx_chain = get_fx_chain(base_role, genre)
                 except Exception:
                     fx_chain = []
 
@@ -1699,7 +1796,6 @@ class ReaperOSC:
                     if not plugin_name:
                         continue
 
-                    # Wait for watcher if it's unresponsive (liveness gate)
                     if not _watcher_alive():
                         logger.info("create_genre_project: waiting for watcher before FX...")
                         recovered = False
@@ -1711,14 +1807,13 @@ class ReaperOSC:
                         if not recovered:
                             logger.warning(
                                 "create_genre_project: watcher still dead, skipping remaining FX on %s",
-                                role,
+                                pid,
                             )
-                            break  # skip remaining FX for this track
+                            break
 
-                    # Add the FX plugin to the track
                     logger.info(
                         "create_genre_project: adding %s to track %d (%s)",
-                        plugin_name, track_idx, role,
+                        plugin_name, track_idx, pid,
                     )
                     fx_result = self._fx_trigger("add", track_idx, plugin_name, wait=4.0)
                     if fx_result.get("success"):
@@ -1733,8 +1828,7 @@ class ReaperOSC:
                         )
                     _time.sleep(0.3)
 
-                # Apply E4B FX modifiers if any
-                fx_mods_for_role = getattr(self, "_fx_modifiers", {}).get(role, []) or []
+                fx_mods_for_role = getattr(self, "_fx_modifiers", {}).get(base_role, []) or []
                 for extra_fx in fx_mods_for_role:
                     if not _watcher_alive():
                         break
@@ -1747,7 +1841,7 @@ class ReaperOSC:
 
             results.append(f"Routing: {len(bus_track_map)} buses + Submaster")
 
-            # ── Step 8: Apply bus FX + submaster FX ────────────────────
+            # ── Step 7: Apply bus FX + submaster FX ────────────────────
             for bus_name, bus_track_num in bus_track_map.items():
                 bus_chain = get_bus_fx_chain(bus_name, genre)
                 for fx_def in bus_chain:
@@ -1777,7 +1871,6 @@ class ReaperOSC:
                         )
                     _time.sleep(0.3)
 
-            # Apply submaster FX
             if submaster_idx is not None:
                 for fx_def in SUBMASTER_FX_CHAIN:
                     plugin_name = fx_def.get("name", "")
@@ -1807,17 +1900,17 @@ class ReaperOSC:
 
             results.append("FX: per-track + bus + submaster")
 
-            # ── Step 9: Final verification ─────────────────────────────
-            expected_tracks_final = pre_insertion_count + num_instruments + len(bus_track_map) + 1
+            # ── Step 8: Final verification ─────────────────────────────
+            expected_tracks_final = pre_insertion_count + total_tracks
             verified = _verify_project_state(
-                expected_tracks_final, len(sections), "Step 9: final verification",
+                expected_tracks_final, len(sections), "Step 8: final verification",
             )
 
             section_names = ", ".join(s["name"] for s in expanded)
             track_summaries = ", ".join(r for r in results if r and not r.startswith("Tempo") and not r.startswith("Markers"))
-            bus_names = ", ".join(f"{k} Bus" for k in bus_track_map.keys())
+            bus_display = ", ".join(f"{k} Bus" for k in bus_track_map.keys())
             routing_summary = (
-                f"{len(instrument_track_map)} instruments, "
+                f"{len(player_track_map)} players, "
                 f"{len(bus_track_map)} buses → Submaster"
             )
 
@@ -1828,7 +1921,7 @@ class ReaperOSC:
                     f"Genre: {genre}, Tempo: {resolved_tempo}, Key: {key} {scale_parsed}\n"
                     f"Sections: {section_names}\n"
                     f"Tracks: {track_summaries}\n"
-                    f"Buses: {bus_names or '(none)'}\n"
+                    f"Buses: {bus_display or '(none)'}\n"
                     f"Routing: {routing_summary}"
                 ),
             )
@@ -2190,6 +2283,67 @@ class ReaperOSC:
             )
             bar_offset += bars
 
+    def _generate_arrangement_v2(
+        self,
+        midi: "MIDIFile",
+        mtrack: int,
+        player: dict,
+        scale_notes: list[int],
+        sections: list[dict],
+        bpm: int,
+    ) -> None:
+        """Generate section-aware MIDI arrangement for one player using the arrangement engine.
+
+        Uses resolve_section_layers to determine per-section activity,
+        density, velocity, and variant assignments.
+
+        Args:
+            midi: MIDIFile object to write into.
+            mtrack: Track index within the MIDI file.
+            player: Player dict from expand_instruments (has id, base_role, variant_index, etc).
+            scale_notes: MIDI note numbers for the current key/scale.
+            sections: Song sections with {"name": str, "bars": int}.
+            bpm: Tempo.
+        """
+        from audioshuttle.arrangement_engine import resolve_section_layers
+
+        bar_offset = 0
+        for section in sections:
+            name = str(section.get("name", "Verse"))
+            bars = int(section.get("bars", 8))
+
+            layer_result = resolve_section_layers([player], name, bars)
+            player_layer = next(
+                (p for p in layer_result if p["player"]["id"] == player["id"]),
+                None,
+            )
+
+            if player_layer is None or not player_layer.get("active", False):
+                bar_offset += bars
+                continue
+
+            density = player_layer["density"]
+            vel_lo, vel_hi = player_layer["vel_range"]
+            variant_index = player_layer["variant_index"]
+            section_type = self._normalize_section_name(name)
+
+            random.seed(hash(f"{player['id']}:{name}:{bars}"))
+
+            midi_mods = getattr(self, "_midi_modifiers", {})
+            role_mod = midi_mods.get(player["base_role"], {})
+            if isinstance(role_mod, dict):
+                density_mod = role_mod.get("density_mod", 0.0)
+                density = max(0.1, min(1.0, density + density_mod))
+
+            self._generate_section_pattern(
+                midi, mtrack, player["base_role"], scale_notes,
+                start_bar=bar_offset, bars=bars,
+                density=density, vel_range=(vel_lo, vel_hi),
+                section_type=section_type, bpm=bpm,
+                variant=variant_index,
+            )
+            bar_offset += bars
+
     def _generate_section_pattern(
         self,
         midi: "MIDIFile",
@@ -2202,6 +2356,7 @@ class ReaperOSC:
         vel_range: tuple[int, int],
         section_type: str,
         bpm: int,
+        variant: int = 0,
     ) -> None:
         """Generate MIDI for one instrument in one section.
 
@@ -2216,70 +2371,84 @@ class ReaperOSC:
             vel_range: (min_vel, max_vel) for dynamics.
             section_type: Normalized section name (verse, chorus, etc.).
             bpm: Tempo.
+            variant: Pattern variant index (0=default, 1=alternate).
         """
         norm_role = self._normalize_role(role)
         vel_mid = (vel_range[0] + vel_range[1]) // 2
 
         # ── Drums ──────────────────────────────────────────────────
         if norm_role in ("drums", "drum", "beat", "kick", "snare", "rhythm"):
-            ch = 9  # Channel 10 (drums)
+            ch = 9
             for bar in range(bars):
                 off = (start_bar + bar) * 4
 
-                # Kick on 1, (3 in chorus/high density)
-                midi.addNote(mtrack, ch, 36, off, 1, vel_mid)
-                if density >= 0.8:
-                    midi.addNote(mtrack, ch, 36, off + 2, 1, int(vel_mid * 0.95))
+                if variant == 1:
+                    # Cymbal Heavy: ride on quarters, soft kick on 1, no snare, open hat on & of 2 and 4
+                    midi.addNote(mtrack, ch, 36, off, 1, int(vel_mid * 0.7))
+                    for q in range(4):
+                        midi.addNote(mtrack, ch, 51, off + q, 1, int(vel_mid * 0.75))
+                    midi.addNote(mtrack, ch, 46, off + 1.5, 0.5, int(vel_mid * 0.6))
+                    midi.addNote(mtrack, ch, 46, off + 3.5, 0.5, int(vel_mid * 0.55))
+                else:
+                    # Standard Kit (variant 0)
+                    midi.addNote(mtrack, ch, 36, off, 1, vel_mid)
+                    if density >= 0.8:
+                        midi.addNote(mtrack, ch, 36, off + 2, 1, int(vel_mid * 0.95))
 
-                # Snare on 2 and 4
-                if density >= 0.3:
-                    midi.addNote(mtrack, ch, 38, off + 1, 1, vel_mid)
-                if density >= 0.4:
-                    midi.addNote(mtrack, ch, 38, off + 3, 1, int(vel_mid * 0.9))
+                    if density >= 0.3:
+                        midi.addNote(mtrack, ch, 38, off + 1, 1, vel_mid)
+                    if density >= 0.4:
+                        midi.addNote(mtrack, ch, 38, off + 3, 1, int(vel_mid * 0.9))
 
-                # Hi-hat subdivision scales with density
-                if density >= 0.8:  # 16th notes
-                    for b in range(16):
-                        vel = int(vel_mid * (0.5 if b % 2 == 0 else 0.35))
-                        midi.addNote(mtrack, ch, 42, off + b * 0.25, 0.25, vel)
-                elif density >= 0.5:  # 8th notes
-                    for b in range(8):
-                        vel = int(vel_mid * 0.5)
-                        midi.addNote(mtrack, ch, 42, off + b * 0.5, 0.5, vel)
-                else:  # Quarter notes
-                    for b in range(4):
-                        vel = int(vel_mid * 0.4)
-                        midi.addNote(mtrack, ch, 42, off + b, 1, vel)
+                    if density >= 0.8:
+                        for b in range(16):
+                            vel = int(vel_mid * (0.5 if b % 2 == 0 else 0.35))
+                            midi.addNote(mtrack, ch, 42, off + b * 0.25, 0.25, vel)
+                    elif density >= 0.5:
+                        for b in range(8):
+                            vel = int(vel_mid * 0.5)
+                            midi.addNote(mtrack, ch, 42, off + b * 0.5, 0.5, vel)
+                    else:
+                        for b in range(4):
+                            vel = int(vel_mid * 0.4)
+                            midi.addNote(mtrack, ch, 42, off + b, 1, vel)
 
-                # Ghost snare in chorus
-                if section_type == "chorus" and density >= 0.9:
-                    midi.addNote(mtrack, ch, 38, off + 2.75, 0.25, int(vel_mid * 0.35))
+                    if section_type == "chorus" and density >= 0.9:
+                        midi.addNote(mtrack, ch, 38, off + 2.75, 0.25, int(vel_mid * 0.35))
 
         # ── Bass ───────────────────────────────────────────────────
         elif norm_role == "bass":
             ch = 0
-            root = scale_notes[0] - 12  # One octave down
+            root = scale_notes[0] - 12
             fifth = scale_notes[4] - 12 if len(scale_notes) > 4 else root + 7
             octave_up = root + 12
             for bar in range(bars):
                 off = (start_bar + bar) * 4
-                if density >= 0.7:
-                    # Walking bass: root, approach, fifth, approach
-                    midi.addNote(mtrack, ch, root, off, 0.9, vel_mid)
-                    approach = root + (scale_notes[1] - scale_notes[0]) if len(scale_notes) > 1 else root + 2
-                    midi.addNote(mtrack, ch, approach - 12, off + 1, 0.9, int(vel_mid * 0.85))
-                    midi.addNote(mtrack, ch, fifth, off + 2, 0.9, vel_mid)
-                    back = root + (scale_notes[-2] - scale_notes[-1]) if len(scale_notes) > 2 else root - 1
-                    midi.addNote(mtrack, ch, back - 12, off + 3, 0.9, int(vel_mid * 0.8))
-                elif density >= 0.4:
-                    # Root-fifth: beats 1-2 root, 3-4 fifth
-                    midi.addNote(mtrack, ch, root, off, 1.8, vel_mid)
-                    midi.addNote(mtrack, ch, root, off + 1, 1.8, int(vel_mid * 0.9))
-                    midi.addNote(mtrack, ch, fifth, off + 2, 1.8, vel_mid)
-                    midi.addNote(mtrack, ch, fifth, off + 3, 1.8, int(vel_mid * 0.9))
+                if variant == 1:
+                    # Octave Jump: root down low, octave up on beat 3
+                    if density >= 0.7:
+                        midi.addNote(mtrack, ch, root, off, 0.9, vel_mid)
+                        midi.addNote(mtrack, ch, root, off + 1, 0.45, int(vel_mid * 0.7))
+                        midi.addNote(mtrack, ch, octave_up, off + 2, 0.9, vel_mid)
+                        midi.addNote(mtrack, ch, octave_up, off + 3, 0.45, int(vel_mid * 0.65))
+                    else:
+                        midi.addNote(mtrack, ch, root, off, 1.8, vel_mid)
+                        midi.addNote(mtrack, ch, octave_up, off + 2, 1.8, int(vel_mid * 0.85))
                 else:
-                    # Sparse: whole note root only
-                    midi.addNote(mtrack, ch, root, off, 3.8, int(vel_mid * 0.8))
+                    if density >= 0.7:
+                        midi.addNote(mtrack, ch, root, off, 0.9, vel_mid)
+                        approach = root + (scale_notes[1] - scale_notes[0]) if len(scale_notes) > 1 else root + 2
+                        midi.addNote(mtrack, ch, approach - 12, off + 1, 0.9, int(vel_mid * 0.85))
+                        midi.addNote(mtrack, ch, fifth, off + 2, 0.9, vel_mid)
+                        back = root + (scale_notes[-2] - scale_notes[-1]) if len(scale_notes) > 2 else root - 1
+                        midi.addNote(mtrack, ch, back - 12, off + 3, 0.9, int(vel_mid * 0.8))
+                    elif density >= 0.4:
+                        midi.addNote(mtrack, ch, root, off, 1.8, vel_mid)
+                        midi.addNote(mtrack, ch, root, off + 1, 1.8, int(vel_mid * 0.9))
+                        midi.addNote(mtrack, ch, fifth, off + 2, 1.8, vel_mid)
+                        midi.addNote(mtrack, ch, fifth, off + 3, 1.8, int(vel_mid * 0.9))
+                    else:
+                        midi.addNote(mtrack, ch, root, off, 3.8, int(vel_mid * 0.8))
 
         # ── Melody / Lead ──────────────────────────────────────────
         elif norm_role in ("melody", "lead", "line"):
@@ -2287,29 +2456,40 @@ class ReaperOSC:
             for bar in range(bars):
                 off = (start_bar + bar) * 4
                 for beat in range(4):
-                    # Rest probability inversely proportional to density
-                    if random.random() > density * 0.8 + 0.2:
-                        continue
-                    # Stepwise motion with occasional leaps at high density
-                    if density >= 0.7 and random.random() < 0.3:
-                        idx = (bar * 4 + beat + random.randint(1, 3)) % len(scale_notes)
+                    if variant == 1:
+                        # Harmony: play a 3rd above what variant 0 would play
+                        if random.random() > density * 0.8 + 0.2:
+                            continue
+                        if density >= 0.7 and random.random() < 0.3:
+                            idx = (bar * 4 + beat + random.randint(1, 3)) % len(scale_notes)
+                        else:
+                            idx = (bar * 4 + beat) % len(scale_notes)
+                        harm_idx = (idx + 2) % len(scale_notes)
+                        note = scale_notes[harm_idx]
+                        if section_type == "chorus" and random.random() < 0.2:
+                            note += 12
+                        dur = 0.9 if density >= 0.5 else 1.8
+                        midi.addNote(mtrack, ch, note, off + beat, dur, int(vel_mid * 0.85))
                     else:
-                        idx = (bar * 4 + beat) % len(scale_notes)
-                    note = scale_notes[idx]
-                    # Wider octave range in chorus
-                    if section_type == "chorus" and random.random() < 0.2:
-                        note += 12
-                    dur = 0.9 if density >= 0.5 else 1.8
-                    midi.addNote(mtrack, ch, note, off + beat, dur, vel_mid)
+                        if random.random() > density * 0.8 + 0.2:
+                            continue
+                        if density >= 0.7 and random.random() < 0.3:
+                            idx = (bar * 4 + beat + random.randint(1, 3)) % len(scale_notes)
+                        else:
+                            idx = (bar * 4 + beat) % len(scale_notes)
+                        note = scale_notes[idx]
+                        if section_type == "chorus" and random.random() < 0.2:
+                            note += 12
+                        dur = 0.9 if density >= 0.5 else 1.8
+                        midi.addNote(mtrack, ch, note, off + beat, dur, vel_mid)
 
         # ── Keys / Chords ──────────────────────────────────────────
         elif norm_role in ("chords", "keys", "key"):
             ch = 0
-            # Scale-appropriate chord degrees
             if len(scale_notes) >= 5:
-                chord_degrees = [0, 3, 4]  # I, IV, V
+                chord_degrees = [0, 3, 4]
                 if density >= 0.7:
-                    chord_degrees = [0, 1, 3, 4, 5]  # I, ii, IV, V, vi
+                    chord_degrees = [0, 1, 3, 4, 5]
             else:
                 chord_degrees = [0, 2, 3]
             for bar in range(bars):
@@ -2322,31 +2502,73 @@ class ReaperOSC:
                     ],
                     "major", degree=deg,
                 )
-                if density >= 0.8:
-                    # Arpeggiated: play chord tones individually
-                    for i, note in enumerate(triad):
-                        midi.addNote(mtrack, ch, note, off + i * 0.5, 0.45, int(vel_mid * 0.7))
-                        midi.addNote(mtrack, ch, note, off + 2 + i * 0.5, 0.45, int(vel_mid * 0.65))
+                if variant == 1:
+                    # Comping: rhythmic stabs on 1 and 3 (or 2 and 4 at high density)
+                    if density >= 0.7:
+                        for note in triad:
+                            midi.addNote(mtrack, ch, note, off + 1, 0.4, int(vel_mid * 0.8))
+                            midi.addNote(mtrack, ch, note, off + 3, 0.4, int(vel_mid * 0.75))
+                    else:
+                        for note in triad:
+                            midi.addNote(mtrack, ch, note, off, 0.4, int(vel_mid * 0.8))
+                            midi.addNote(mtrack, ch, note, off + 2, 0.4, int(vel_mid * 0.75))
                 else:
-                    # Block chords: hold for whole bar
-                    for note in triad:
-                        midi.addNote(mtrack, ch, note, off, 3.8, int(vel_mid * 0.75))
+                    if density >= 0.8:
+                        for i, note in enumerate(triad):
+                            midi.addNote(mtrack, ch, note, off + i * 0.5, 0.45, int(vel_mid * 0.7))
+                            midi.addNote(mtrack, ch, note, off + 2 + i * 0.5, 0.45, int(vel_mid * 0.65))
+                    else:
+                        for note in triad:
+                            midi.addNote(mtrack, ch, note, off, 3.8, int(vel_mid * 0.75))
 
-        # ── Pad ────────────────────────────────────────────────────
-        elif norm_role == "pad":
+        # ── Rhythm Guitar ──────────────────────────────────────────
+        elif norm_role == "rhythm":
             ch = 0
             root = scale_notes[0]
             third = scale_notes[2] if len(scale_notes) > 2 else root + 4
             fifth = scale_notes[4] if len(scale_notes) > 4 else root + 7
-            chord = [root, third, fifth]
-            # Add seventh at high density
-            if density >= 0.7 and len(scale_notes) > 6:
-                seventh = scale_notes[6]
-                chord.append(seventh)
             for bar in range(bars):
                 off = (start_bar + bar) * 4
-                for note in chord:
-                    midi.addNote(mtrack, ch, note, off, 3.9, int(vel_mid * 0.6))
+                if variant == 1:
+                    # Arpeggiated: root, 3rd, 5th, 3rd as 8th notes per bar
+                    chord_tones = [root, third, fifth, third]
+                    for i, note in enumerate(chord_tones):
+                        midi.addNote(mtrack, ch, note, off + i * 0.5, 0.45, int(vel_mid * 0.7))
+                        midi.addNote(mtrack, ch, note, off + 2 + i * 0.5, 0.45, int(vel_mid * 0.65))
+                else:
+                    # Power Chords: root + fifth together, 2 beats, on 1 and 3
+                    midi.addNote(mtrack, ch, root, off, 1.8, vel_mid)
+                    midi.addNote(mtrack, ch, fifth, off, 1.8, int(vel_mid * 0.85))
+                    midi.addNote(mtrack, ch, root, off + 2, 1.8, vel_mid)
+                    midi.addNote(mtrack, ch, fifth, off + 2, 1.8, int(vel_mid * 0.85))
+                    if density >= 0.7:
+                        for beat in range(4):
+                            midi.addNote(mtrack, ch, root, off + beat + 0.0, 0.45, int(vel_mid * 0.6))
+                            midi.addNote(mtrack, ch, root, off + beat + 0.5, 0.45, int(vel_mid * 0.5))
+
+        # ── Lead Guitar ────────────────────────────────────────────
+        elif norm_role == "lead" and "guitar" in role.lower():
+            ch = 0
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                if variant == 1:
+                    # Sustained: one note per bar, held for 3.8 beats, stepwise
+                    idx = bar % len(scale_notes)
+                    midi.addNote(mtrack, ch, scale_notes[idx], off, 3.8, vel_mid)
+                else:
+                    # Melodic: same as melody/lead variant 0
+                    for beat in range(4):
+                        if random.random() > density * 0.8 + 0.2:
+                            continue
+                        if density >= 0.7 and random.random() < 0.3:
+                            idx = (bar * 4 + beat + random.randint(1, 3)) % len(scale_notes)
+                        else:
+                            idx = (bar * 4 + beat) % len(scale_notes)
+                        note = scale_notes[idx]
+                        if section_type == "chorus" and random.random() < 0.2:
+                            note += 12
+                        dur = 0.9 if density >= 0.5 else 1.8
+                        midi.addNote(mtrack, ch, note, off + beat, dur, vel_mid)
 
         # ── Strings ────────────────────────────────────────────────
         elif norm_role in ("strings", "string"):
@@ -2356,38 +2578,186 @@ class ReaperOSC:
             fifth = scale_notes[4] if len(scale_notes) > 4 else root + 7
             for bar in range(bars):
                 off = (start_bar + bar) * 4
-                for note in [root, third, fifth]:
-                    midi.addNote(mtrack, ch, note, off, 3.8, int(vel_mid * 0.65))
-                # Counter-melody at high density
-                if density >= 0.7:
-                    for beat in range(0, 4, 2):
-                        idx = (bar * 2 + beat // 2) % len(scale_notes)
+                if variant == 1:
+                    # Counter Melody: individual notes, 8th rhythm, velocity 50%
+                    for i in range(8):
+                        idx = (bar * 8 + i) % len(scale_notes)
                         midi.addNote(mtrack, ch, scale_notes[idx] + 12,
-                                     off + beat, 1.8, int(vel_mid * 0.5))
+                                     off + i * 0.5, 0.45, int(vel_mid * 0.5))
+                else:
+                    for note in [root, third, fifth]:
+                        midi.addNote(mtrack, ch, note, off, 3.8, int(vel_mid * 0.65))
+                    if density >= 0.7:
+                        for beat in range(0, 4, 2):
+                            idx = (bar * 2 + beat // 2) % len(scale_notes)
+                            midi.addNote(mtrack, ch, scale_notes[idx] + 12,
+                                         off + beat, 1.8, int(vel_mid * 0.5))
+
+        # ── Pad ────────────────────────────────────────────────────
+        elif norm_role == "pad":
+            ch = 0
+            root = scale_notes[0]
+            third = scale_notes[2] if len(scale_notes) > 2 else root + 4
+            fifth = scale_notes[4] if len(scale_notes) > 4 else root + 7
+            chord = [root, third, fifth]
+            if density >= 0.7 and len(scale_notes) > 6:
+                seventh = scale_notes[6]
+                chord.append(seventh)
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                if variant == 1:
+                    # Swell: velocity ramps up over 2 bars then down over 2 bars
+                    cycle_pos = bar % 4
+                    if cycle_pos < 2:
+                        frac = cycle_pos / 2.0
+                    else:
+                        frac = 1.0 - (cycle_pos - 2) / 2.0
+                    swell_vel = int(vel_range[0] + (vel_range[1] - vel_range[0]) * frac)
+                    for note in chord:
+                        midi.addNote(mtrack, ch, note, off, 3.9, int(swell_vel * 0.6))
+                else:
+                    for note in chord:
+                        midi.addNote(mtrack, ch, note, off, 3.9, int(vel_mid * 0.6))
+
+        # ── Vocals ─────────────────────────────────────────────────
+        elif norm_role == "vocals":
+            ch = 0
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                for beat in range(4):
+                    if variant == 1:
+                        # Harmony: 3rd above the melody
+                        if random.random() > density * 0.8 + 0.2:
+                            continue
+                        idx = (bar * 4 + beat) % len(scale_notes)
+                        harm_idx = (idx + 2) % len(scale_notes)
+                        note = scale_notes[harm_idx]
+                        dur = 0.9 if density >= 0.5 else 1.8
+                        midi.addNote(mtrack, ch, note, off + beat, dur, int(vel_mid * 0.85))
+                    else:
+                        # Main melody (same as melody/lead variant 0)
+                        if random.random() > density * 0.8 + 0.2:
+                            continue
+                        if density >= 0.7 and random.random() < 0.3:
+                            idx = (bar * 4 + beat + random.randint(1, 3)) % len(scale_notes)
+                        else:
+                            idx = (bar * 4 + beat) % len(scale_notes)
+                        note = scale_notes[idx]
+                        if section_type == "chorus" and random.random() < 0.2:
+                            note += 12
+                        dur = 0.9 if density >= 0.5 else 1.8
+                        midi.addNote(mtrack, ch, note, off + beat, dur, vel_mid)
+
+        # ── Cowbell (channel 9, note 56) ───────────────────────────
+        elif norm_role == "cowbell":
+            ch = 9
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                if variant == 1:
+                    # Syncopated: & of 2, & of 4, occasional beat 1 accent
+                    midi.addNote(mtrack, ch, 56, off + 1.5, 0.5, int(vel_mid * 0.8))
+                    midi.addNote(mtrack, ch, 56, off + 3.5, 0.5, int(vel_mid * 0.75))
+                    if bar % 4 == 0:
+                        midi.addNote(mtrack, ch, 56, off, 0.5, vel_mid)
+                else:
+                    # Classic: beats 1 and 3
+                    midi.addNote(mtrack, ch, 56, off, 0.5, vel_mid)
+                    midi.addNote(mtrack, ch, 56, off + 2, 0.5, int(vel_mid * 0.85))
+
+        # ── Toms (channel 9) ───────────────────────────────────────
+        elif norm_role == "toms":
+            ch = 9
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                if variant == 1:
+                    # Fill pattern: rolling 8ths on beat 4
+                    midi.addNote(mtrack, ch, 47, off, 1, int(vel_mid * 0.7))
+                    midi.addNote(mtrack, ch, 47, off + 1, 1, int(vel_mid * 0.65))
+                    for i in range(4):
+                        tom = [47, 45, 43, 47][i]
+                        midi.addNote(mtrack, ch, tom, off + 3 + i * 0.25, 0.25, int(vel_mid * 0.8))
+                else:
+                    # Basic: low tom on 1, mid tom on 3
+                    midi.addNote(mtrack, ch, 47, off, 1, int(vel_mid * 0.75))
+                    if density >= 0.5:
+                        midi.addNote(mtrack, ch, 45, off + 2, 1, int(vel_mid * 0.7))
+
+        # ── Ride Cymbal (channel 9, note 51) ───────────────────────
+        elif norm_role == "ride":
+            ch = 9
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                if variant == 1:
+                    # Bell pattern: dotted rhythm
+                    midi.addNote(mtrack, ch, 53, off, 0.67, int(vel_mid * 0.8))
+                    midi.addNote(mtrack, ch, 53, off + 0.67, 0.33, int(vel_mid * 0.6))
+                    midi.addNote(mtrack, ch, 53, off + 1, 0.67, int(vel_mid * 0.8))
+                    midi.addNote(mtrack, ch, 53, off + 1.67, 0.33, int(vel_mid * 0.6))
+                    midi.addNote(mtrack, ch, 53, off + 2, 0.67, int(vel_mid * 0.8))
+                    midi.addNote(mtrack, ch, 53, off + 2.67, 0.33, int(vel_mid * 0.6))
+                    midi.addNote(mtrack, ch, 53, off + 3, 0.67, int(vel_mid * 0.8))
+                    midi.addNote(mtrack, ch, 53, off + 3.67, 0.33, int(vel_mid * 0.6))
+                else:
+                    # Standard ride: quarter notes
+                    for q in range(4):
+                        vel = int(vel_mid * 0.65) if q % 2 == 0 else int(vel_mid * 0.55)
+                        midi.addNote(mtrack, ch, 51, off + q, 1, vel)
+
+        # ── Synth ──────────────────────────────────────────────────
+        elif norm_role == "synth":
+            ch = 0
+            root = scale_notes[0]
+            fifth = scale_notes[4] if len(scale_notes) > 4 else root + 7
+            for bar in range(bars):
+                off = (start_bar + bar) * 4
+                if variant == 1:
+                    # Stab: short percussive hits on 1 and 3, root and fifth
+                    midi.addNote(mtrack, ch, root, off, 0.2, vel_mid)
+                    midi.addNote(mtrack, ch, fifth, off, 0.2, int(vel_mid * 0.85))
+                    midi.addNote(mtrack, ch, root, off + 2, 0.2, int(vel_mid * 0.9))
+                    midi.addNote(mtrack, ch, fifth, off + 2, 0.2, int(vel_mid * 0.8))
+                else:
+                    # Same as melody/lead variant 0
+                    for beat in range(4):
+                        if random.random() > density * 0.8 + 0.2:
+                            continue
+                        if density >= 0.7 and random.random() < 0.3:
+                            idx = (bar * 4 + beat + random.randint(1, 3)) % len(scale_notes)
+                        else:
+                            idx = (bar * 4 + beat) % len(scale_notes)
+                        note = scale_notes[idx]
+                        dur = 0.9 if density >= 0.5 else 1.8
+                        midi.addNote(mtrack, ch, note, off + beat, dur, vel_mid)
 
         # ── Arp ────────────────────────────────────────────────────
         elif norm_role == "arp":
             ch = 0
-            # Speed scales with density: 8ths at 0.5, 16ths at 0.8+
-            subdivision = 0.5 if density < 0.7 else 0.25
-            notes_per_bar = int(4.0 / subdivision)
             for bar in range(bars):
                 off = (start_bar + bar) * 4
-                for i in range(notes_per_bar):
-                    idx = (bar * notes_per_bar + i) % len(scale_notes)
-                    note = scale_notes[idx]
-                    # Octave alternation for interest
-                    if i % 2 == 1:
-                        note += 12
-                    midi.addNote(mtrack, ch, note,
-                                 off + i * subdivision,
-                                 subdivision * 0.9,
-                                 int(vel_mid * 0.7))
+                if variant == 1:
+                    # Fast: 16th notes with octave alternation
+                    for i in range(16):
+                        idx = (bar * 16 + i) % len(scale_notes)
+                        note = scale_notes[idx]
+                        if i % 2 == 1:
+                            note += 12
+                        midi.addNote(mtrack, ch, note, off + i * 0.25, 0.2, int(vel_mid * 0.65))
+                else:
+                    subdivision = 0.5 if density < 0.7 else 0.25
+                    notes_per_bar = int(4.0 / subdivision)
+                    for i in range(notes_per_bar):
+                        idx = (bar * notes_per_bar + i) % len(scale_notes)
+                        note = scale_notes[idx]
+                        if i % 2 == 1:
+                            note += 12
+                        midi.addNote(mtrack, ch, note,
+                                     off + i * subdivision,
+                                     subdivision * 0.9,
+                                     int(vel_mid * 0.7))
 
         # ── FX Riser ───────────────────────────────────────────────
         elif norm_role in ("fx", "riser"):
             ch = 0
-            # Ascending pitch sweep over the section
             start_note = scale_notes[0] - 12
             end_note = scale_notes[0] + 24
             total_beats = bars * 4
@@ -2402,15 +2772,13 @@ class ReaperOSC:
         # ── Sub Kick ───────────────────────────────────────────────
         elif norm_role == "sub":
             ch = 0
-            root = scale_notes[0] - 24  # Two octaves down
+            root = scale_notes[0] - 24
             for bar in range(bars):
                 off = (start_bar + bar) * 4
                 if density >= 0.6:
-                    # Four on the floor
                     for beat in range(4):
                         midi.addNote(mtrack, ch, root, off + beat, 0.9, vel_mid)
                 else:
-                    # Just beat 1
                     midi.addNote(mtrack, ch, root, off, 0.9, int(vel_mid * 0.8))
 
         # ── Generic fallback ───────────────────────────────────────
@@ -2677,6 +3045,9 @@ class ReaperOSC:
         "kick": "ReaSynDr",
         "snare": "ReaSynDr",
         "rhythm": "ReaSynDr",
+        "cowbell": "ReaSynDr",
+        "toms": "ReaSynDr",
+        "ride": "ReaSynDr",
         "bass": "ReaSynth",
         "melody": "ReaSynth",
         "lead": "ReaSynth",
@@ -2694,11 +3065,13 @@ class ReaperOSC:
         "sub": "ReaSynth",
         "rhythm_guitar": "ReaSynth",
         "lead_guitar": "ReaSynth",
+        "vocals": "ReaSynth",
     }
 
     # All roles that can appear in arrangements
     _ALL_ROLES = frozenset({
         "drums", "drum", "beat", "kick", "snare", "rhythm",
+        "cowbell", "toms", "ride",
         "bass", "melody", "lead", "line",
         "chords", "keys", "key", "pad", "synth",
         "strings", "string", "arp", "fx", "riser", "sub",
@@ -2770,9 +3143,11 @@ class ReaperOSC:
     def _normalize_role(role: str) -> str:
         """Normalize instrument role for matching.
         'Lead Guitar'/'lead_guitar' → 'lead', 'FX Riser' → 'fx', 'Snare+Hat' → 'snare'
+        'rhythm_guitar_2' → 'rhythm', 'drums_1' → 'drums'
         """
-        normalized = role.lower().strip().split()[0].split("+")[0].split("-")[0]
-        # Also strip underscore suffixes: 'rhythm_guitar' → 'rhythm', 'pad_synth' → 'pad'
+        normalized = role.lower().strip()
+        normalized = re.sub(r'_\d+$', '', normalized)
+        normalized = normalized.split()[0].split("+")[0].split("-")[0]
         normalized = normalized.split("_")[0]
         return normalized
 
@@ -3384,7 +3759,7 @@ class ReaperOSC:
 
     # ── State discovery ─────────────────────────────────────────
 
-    def refresh_state(self, wait: float = 0.5) -> DAWState:
+    def refresh_state(self, wait: float = 2.5) -> DAWState:
         """Get current DAW state via the Lua watcher's state dump.
 
         Writes a trigger file that the __startup.lua watcher detects.
@@ -3392,7 +3767,9 @@ class ReaperOSC:
         to /communication/audioshuttle_daw_state.json, which we read back.
 
         Args:
-            wait: Seconds to wait for the state dump (default 0.5s).
+            wait: Seconds to wait for the state dump (default 2.5s).
+                Previous default of 0.5s was too short when the watcher
+                was busy processing other triggers (markers, tracks, etc.).
         """
         import json
         import glob

@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+import re
 from typing import Any
+
+
+def get_base_role(instrument_id: str) -> str:
+    """Strip the _N suffix from a doubled instrument ID.
+
+    'rhythm_guitar_2' -> 'rhythm_guitar', 'drums' -> 'drums'
+    """
+    return re.sub(r'_\d+$', '', instrument_id)
 
 # ─── Bus / Track Color Palette ───────────────────────────────────────────────
 # Consistent, non-garish colors for grouping visualization in DAW.
@@ -106,7 +115,7 @@ def get_track_color(instrument: str, bus_name: str | None = None) -> str:
     """Resolve the color for a track based on instrument role and bus membership.
 
     Args:
-        instrument: Instrument name (e.g., "lead_guitar", "drums")
+        instrument: Instrument name (e.g., "lead_guitar", "drums", "rhythm_guitar_2")
         bus_name: Optional bus name if instrument belongs to a bus
 
     Returns:
@@ -114,19 +123,20 @@ def get_track_color(instrument: str, bus_name: str | None = None) -> str:
     """
     inst_lower = instrument.lower().strip()
 
-    # Bus color takes priority if instrument is in a bus
     if bus_name:
         bus_color = BUS_COLORS.get(bus_name)
         if bus_color:
             return bus_color.lstrip("#")
 
-    # Check instrument-specific color
     if inst_lower in INSTRUMENT_COLORS:
         return INSTRUMENT_COLORS[inst_lower].lstrip("#")
 
-    # Fall back to role function color
+    base = get_base_role(inst_lower)
+    if base != inst_lower and base in INSTRUMENT_COLORS:
+        return INSTRUMENT_COLORS[base].lstrip("#")
+
     for func, members in ROLE_FUNCTION.items():
-        if inst_lower in members:
+        if inst_lower in members or base in members:
             bus_color = BUS_COLORS.get(func.capitalize())
             if bus_color:
                 return bus_color.lstrip("#")
@@ -206,12 +216,16 @@ GROUPING_STRATEGY: dict[str, str] = {
     "orchestral": "instrument_type",
     "classical": "instrument_type",
     "cinematic": "role_function",
+    "funk": "instrument_type",
+    "soul": "instrument_type",
+    "latin": "instrument_type",
+    "worship": "instrument_type",
 }
 
 # ─── Genre Hierarchy (inheritance for sub-genres) ────────────────────────────
 # Sub-genres inherit from their parent genre. Leaf genres override.
 GENRE_HIERARCHY: dict[str, str] = {
-    "metal": "rock",        # metal inherits rock structure, modifies instrumentation
+    "metal": "rock",
     "punk": "rock",
     "blues": "rock",
     "country": "rock",
@@ -226,6 +240,10 @@ GENRE_HIERARCHY: dict[str, str] = {
     "futurebass": "electronic",
     "hiphop": "electronic",
     "rnb": "hiphop",
+    "soul": "rnb",
+    "funk": "pop",
+    "worship": "pop",
+    "latin": "pop",
 }
 
 # ─── Genre Modifiers (how sub-genres modify parent) ──────────────────────────
@@ -234,19 +252,44 @@ GENRE_HIERARCHY: dict[str, str] = {
 
 GENRE_MODIFIERS: dict[str, dict[str, Any]] = {
     "metal": {
-        "add_instruments": ["lead_guitar"],  # more solo guitars
-        "remove_instruments": ["keys"],     # no keys in metal
-        "tempo_shift": 40,                  # faster default (160 vs 120)
+        "add_instruments": ["lead_guitar"],
+        "remove_instruments": ["keys"],
+        "tempo_shift": 40,
+        "doubles_override": {"rhythm_guitar": 2, "lead_guitar": 2, "drums": 1, "bass": 1},
+    },
+    "punk": {
+        "tempo_shift": 40,
+        "doubles_override": {"rhythm_guitar": 2, "lead_guitar": 2, "drums": 1, "bass": 1, "keys": 1, "vocals": 1},
+    },
+    "blues": {
+        "tempo_shift": -20,
+        "doubles_override": {"rhythm_guitar": 2, "lead_guitar": 2, "drums": 1, "bass": 1, "keys": 1, "vocals": 1},
+    },
+    "country": {
+        "tempo_shift": -10,
+        "doubles_override": {"rhythm_guitar": 2, "lead_guitar": 1, "strings": 2, "drums": 1, "bass": 1, "keys": 1, "vocals": 1},
     },
     "orchestral": {
         "add_instruments": ["strings", "brass", "woodwinds", "harp", "timpani"],
         "remove_instruments": ["bass", "keys", "rhythm_guitar", "lead_guitar", "drums"],
-        "tempo_shift": -30,  # slower (90 vs 120)
+        "tempo_shift": -30,
     },
     "synthwave": {
         "add_instruments": ["pad", "arp", "fx"],
         "remove_instruments": [],
         "tempo_shift": 0,
+    },
+    "funk": {
+        "doubles_override": {"rhythm_guitar": 2, "keys": 2, "drums": 1, "bass": 1, "melody": 1, "vocals": 1},
+    },
+    "soul": {
+        "doubles_override": {"keys": 2, "strings": 2, "vocals": 2, "drums": 1, "bass": 1, "melody": 1},
+    },
+    "worship": {
+        "doubles_override": {"keys": 2, "pad": 2, "strings": 2, "drums": 1, "bass": 1, "vocals": 1},
+    },
+    "latin": {
+        "doubles_override": {"drums": 2, "keys": 2, "bass": 1, "melody": 1, "vocals": 1},
     },
 }
 
@@ -281,6 +324,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 8},
         ],
         "instruments": ["drums", "bass", "rhythm_guitar", "lead_guitar", "keys", "vocals"],
+        "doubles": {"rhythm_guitar": 2, "lead_guitar": 1, "keys": 1, "vocals": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -300,6 +344,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 8},
         ],
         "instruments": ["drums", "bass", "keys", "pad", "melody", "vocals"],
+        "doubles": {"keys": 2, "pad": 1, "melody": 1, "vocals": 2, "drums": 1, "bass": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -316,6 +361,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 8},
         ],
         "instruments": ["drums", "sub", "bass", "synth", "pad", "arp", "fx"],
+        "doubles": {"synth": 2, "arp": 2, "pad": 2, "drums": 1, "sub": 1, "bass": 1, "fx": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -333,6 +379,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 4},
         ],
         "instruments": ["drums", "bass", "sub", "keys", "pad", "melody"],
+        "doubles": {"synth": 2, "pad": 2, "keys": 1, "melody": 1, "drums": 1, "bass": 1, "sub": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -347,6 +394,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 8},
         ],
         "instruments": ["drums", "upright_bass", "piano", "melody", "pad"],
+        "doubles": {"keys": 2, "melody": 2, "drums": 1, "upright_bass": 1, "pad": 1},
         "time_signature": (4, 4),
         "feel": "swing",
     },
@@ -362,6 +410,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 8},
         ],
         "instruments": ["strings", "brass", "woodwinds", "percussion", "harp", "timpani"],
+        "doubles": {"strings": 3, "brass": 2, "woodwinds": 1, "percussion": 1, "harp": 1, "timpani": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -376,6 +425,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 16},
         ],
         "instruments": ["pad", "strings", "keys", "fx", "melody"],
+        "doubles": {"pad": 3, "strings": 2, "keys": 1, "fx": 1, "melody": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -394,6 +444,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 4},
         ],
         "instruments": ["drums", "bass", "rhythm_guitar", "lead_guitar"],
+        "doubles": {"rhythm_guitar": 2, "lead_guitar": 2, "drums": 1, "bass": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -411,6 +462,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 8},
         ],
         "instruments": ["drums", "bass", "rhythm_guitar", "keys", "melody"],
+        "doubles": {"rhythm_guitar": 2, "keys": 2, "drums": 1, "bass": 1, "melody": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -425,6 +477,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 8},
         ],
         "instruments": ["strings", "brass", "pad", "keys", "melody"],
+        "doubles": {"strings": 3, "brass": 2, "pad": 2, "keys": 1, "melody": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -442,6 +495,7 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 4},
         ],
         "instruments": ["drums", "bass", "keys", "pad", "melody", "vocals"],
+        "doubles": {"keys": 2, "strings": 2, "vocals": 1, "pad": 1, "drums": 1, "bass": 1, "melody": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -459,6 +513,79 @@ GENRE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "outro", "bars": 4},
         ],
         "instruments": ["drums", "bass", "sub", "keys", "pad", "melody"],
+        "doubles": {"synth": 2, "pad": 2, "keys": 1, "melody": 1, "drums": 1, "bass": 1, "sub": 1},
+        "time_signature": (4, 4),
+        "feel": "straight",
+    },
+    "funk": {
+        "tempo_range": (90, 120),
+        "default_tempo": 105,
+        "sections": [
+            {"name": "intro", "bars": 4},
+            {"name": "verse", "bars": 16},
+            {"name": "chorus", "bars": 8},
+            {"name": "verse", "bars": 16},
+            {"name": "chorus", "bars": 8},
+            {"name": "bridge", "bars": 8},
+            {"name": "chorus", "bars": 8},
+            {"name": "outro", "bars": 8},
+        ],
+        "instruments": ["drums", "bass", "rhythm_guitar", "keys", "melody", "vocals"],
+        "doubles": {"rhythm_guitar": 2, "keys": 2, "drums": 1, "bass": 1, "melody": 1, "vocals": 1},
+        "time_signature": (4, 4),
+        "feel": "straight",
+    },
+    "soul": {
+        "tempo_range": (70, 100),
+        "default_tempo": 85,
+        "sections": [
+            {"name": "intro", "bars": 4},
+            {"name": "verse", "bars": 16},
+            {"name": "chorus", "bars": 8},
+            {"name": "verse", "bars": 16},
+            {"name": "chorus", "bars": 8},
+            {"name": "bridge", "bars": 8},
+            {"name": "chorus", "bars": 8},
+            {"name": "outro", "bars": 4},
+        ],
+        "instruments": ["drums", "bass", "keys", "strings", "vocals", "melody"],
+        "doubles": {"keys": 2, "strings": 2, "vocals": 2, "drums": 1, "bass": 1, "melody": 1},
+        "time_signature": (4, 4),
+        "feel": "straight",
+    },
+    "latin": {
+        "tempo_range": (90, 130),
+        "default_tempo": 110,
+        "sections": [
+            {"name": "intro", "bars": 4},
+            {"name": "verse", "bars": 16},
+            {"name": "chorus", "bars": 8},
+            {"name": "verse", "bars": 16},
+            {"name": "chorus", "bars": 8},
+            {"name": "bridge", "bars": 8},
+            {"name": "chorus", "bars": 8},
+            {"name": "outro", "bars": 8},
+        ],
+        "instruments": ["drums", "bass", "keys", "melody", "vocals"],
+        "doubles": {"drums": 2, "keys": 2, "bass": 1, "melody": 1, "vocals": 1},
+        "time_signature": (4, 4),
+        "feel": "straight",
+    },
+    "worship": {
+        "tempo_range": (60, 100),
+        "default_tempo": 80,
+        "sections": [
+            {"name": "intro", "bars": 8},
+            {"name": "verse", "bars": 16},
+            {"name": "chorus", "bars": 8},
+            {"name": "verse", "bars": 16},
+            {"name": "chorus", "bars": 8},
+            {"name": "bridge", "bars": 8},
+            {"name": "chorus", "bars": 8},
+            {"name": "outro", "bars": 8},
+        ],
+        "instruments": ["drums", "bass", "keys", "pad", "strings", "vocals"],
+        "doubles": {"keys": 2, "pad": 2, "strings": 2, "drums": 1, "bass": 1, "vocals": 1},
         "time_signature": (4, 4),
         "feel": "straight",
     },
@@ -541,7 +668,9 @@ def resolve_genre_profile(genre: str, additions: list[str] | None = None) -> dic
 
     profile["instruments"] = list(instruments_set)
 
-    # Apply tempo shift from leaf genre modifier
+    doubles = _resolve_doubles_along_path(hierarchy_path)
+    profile["doubles"] = doubles
+
     if genre_lower in GENRE_MODIFIERS:
         shift = GENRE_MODIFIERS[genre_lower].get("tempo_shift", 0)
         if shift:
@@ -554,11 +683,54 @@ def resolve_genre_profile(genre: str, additions: list[str] | None = None) -> dic
     return profile
 
 
+def _resolve_doubles_along_path(hierarchy_path: list[str]) -> dict[str, int]:
+    """Merge doubles configs along a genre hierarchy path."""
+    result: dict[str, int] = {}
+    for gen in hierarchy_path:
+        profile = GENRE_PROFILES.get(gen)
+        if profile and "doubles" in profile:
+            result.update(profile["doubles"])
+        mod = GENRE_MODIFIERS.get(gen)
+        if mod and "doubles_override" in mod:
+            result.update(mod["doubles_override"])
+    return result
+
+
+def resolve_genre_doubles(genre: str, user_doubles: dict[str, int] | None = None) -> dict[str, int]:
+    """Resolve the doubling config for a genre, with user overrides.
+
+    Walks the genre hierarchy to merge doubles configs, then applies user overrides.
+
+    Args:
+        genre: Genre name (e.g., "metal", "punk")
+        user_doubles: Optional user-specified doubling overrides
+
+    Returns:
+        Dict mapping instrument names to copy counts (1 = no double, 2+ = doubled)
+    """
+    genre_lower = genre.lower().strip()
+
+    hierarchy_path = []
+    current = genre_lower
+    while current:
+        hierarchy_path.insert(0, current)
+        current = GENRE_HIERARCHY.get(current, "")
+
+    result = _resolve_doubles_along_path(hierarchy_path)
+
+    if user_doubles:
+        result.update(user_doubles)
+
+    return result
+
+
 def get_role_function(instrument: str) -> str | None:
     """Get the musical role function for an instrument.
 
+    Handles doubled instruments (e.g., 'rhythm_guitar_2') by stripping the _N suffix.
+
     Args:
-        instrument: Instrument name (e.g., "lead_guitar", "pad", "drums")
+        instrument: Instrument name (e.g., "lead_guitar", "pad", "rhythm_guitar_2")
 
     Returns:
         Role function string or None if not found
@@ -567,6 +739,11 @@ def get_role_function(instrument: str) -> str | None:
     for function, instruments in ROLE_FUNCTION.items():
         if inst_lower in instruments:
             return function
+    base = get_base_role(inst_lower)
+    if base != inst_lower:
+        for function, instruments in ROLE_FUNCTION.items():
+            if base in instruments:
+                return function
     return None
 
 
@@ -637,22 +814,21 @@ def compute_instrument_grouping(
                 bus_name = func.capitalize()
                 buses[bus_name] = insts
 
-    # ─── Instrument-type based grouping ───────────────────────────────────────
     elif strategy == "instrument_type":
         family_groups: dict[str, list[str]] = {}
 
         for inst in instruments:
             inst_lower = inst.lower()
+            base = get_base_role(inst_lower)
             assigned = False
             for family, members in INSTRUMENT_FAMILIES.items():
-                if inst_lower in members:
+                if inst_lower in members or base in members:
                     if family not in family_groups:
                         family_groups[family] = []
                     family_groups[family].append(inst)
                     assigned = True
                     break
             if not assigned:
-                # Unclassified instrument - create singleton group
                 func = get_role_function(inst)
                 if func:
                     bus_name = func.capitalize()
@@ -660,7 +836,6 @@ def compute_instrument_grouping(
                     bus_name = inst.capitalize()
                 family_groups[bus_name] = [inst]
 
-        # Only create buses for families with >1 instrument
         for family, insts in family_groups.items():
             if len(insts) > 1:
                 buses[family.capitalize()] = insts
@@ -678,11 +853,17 @@ def get_genre(genre_name: str | None) -> dict[str, Any]:
 
 
 def get_family(role: str) -> str:
-    """Map any instrument role to its family. Raises ValueError if role unknown."""
+    """Map any instrument role to its family. Handles doubled instruments (_N suffix).
+    Raises ValueError if role unknown."""
     role_lower = role.lower()
     for family, roles in INSTRUMENT_FAMILIES.items():
         if role_lower in roles:
             return family
+    base = get_base_role(role_lower)
+    if base != role_lower:
+        for family, roles in INSTRUMENT_FAMILIES.items():
+            if base in roles:
+                return family
     raise ValueError(f"Unknown instrument role: {role}")
 
 
