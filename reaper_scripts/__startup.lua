@@ -193,7 +193,6 @@ function handle_color_trigger(content)
 end
 
 function handle_fx_trigger(content)
-    -- Format: command:track:arg1:arg2:...
     local parts = {}
     for p in string.gmatch(content, "[^:]+") do table.insert(parts, p) end
     if #parts < 2 then return end
@@ -201,38 +200,29 @@ function handle_fx_trigger(content)
     local tn = tonumber(parts[2])
     if not tn then return end
     local track = reaper.GetTrack(0, tn - 1)
-    local result = {success = false, error = "unknown command: " .. cmd}
+    if not track then
+        fwrite(COMM_DIR .. "audioshuttle_fx_result.json", '{"success":false,"error":"track not found","fx_index":-1}')
+        return
+    end
+    local result = {success = false, fx_index = -1, error = "unknown"}
     
     if cmd == "add" and #parts >= 3 then
         local fx_name = parts[3]
         local idx = reaper.TrackFX_AddByName(track, fx_name, false, -1)
-        result = {success = idx >= 0, fx_index = idx, fx_name = fx_name}
-        log("FX add " .. fx_name .. " on t" .. tn .. " -> idx=" .. idx)
+        result = {success = idx >= 0, fx_index = idx, fx_name = fx_name, error = idx < 0 and "failed" or ""}
+        log("FX add " .. fx_name .. " t" .. tn .. " -> " .. idx)
     elseif cmd == "remove" and #parts >= 3 then
-        local fx_idx = tonumber(parts[3])
-        if fx_idx then
-            reaper.TrackFX_Delete(track, fx_idx)
-            result = {success = true, fx_index = fx_idx}
-        end
+        local fi = tonumber(parts[3])
+        if fi then reaper.TrackFX_Delete(track, fi); result = {success = true, fx_index = fi, error = ""} end
     elseif cmd == "wet" and #parts >= 4 then
-        local fx_idx = tonumber(parts[3])
-        local wet = tonumber(parts[4])
-        if fx_idx and wet then
-            reaper.TrackFX_SetParamNormalized(track, fx_idx, 0, wet)
-            result = {success = true, wet = wet}
-        end
+        local fi = tonumber(parts[3]); local wet = tonumber(parts[4])
+        if fi and wet then reaper.TrackFX_SetParamNormalized(track, fi, 0, wet); result = {success = true, fx_index = fi, error = ""} end
     elseif cmd == "bypass" and #parts >= 4 then
-        local fx_idx = tonumber(parts[3])
-        local en = (parts[4] == "1" or parts[4] == "true")
-        if fx_idx then
-            reaper.TrackFX_SetEnabled(track, fx_idx, en)
-            result = {success = true, bypass = en}
-        end
+        local fi = tonumber(parts[3]); local en = (parts[4] == "1" or parts[4] == "true")
+        if fi then reaper.TrackFX_SetEnabled(track, fi, en); result = {success = true, fx_index = fi, error = ""} end
     end
-    -- Write result as JSON
-    local rjson = string.format('{"success":%s,"error":"%s","fx_index":%d}',
-        tostring(result.success), tostring(result.error or ""), result.fx_index or -1)
-    fwrite(COMM_DIR .. "audioshuttle_fx_result.json", rjson)
+    fwrite(COMM_DIR .. "audioshuttle_fx_result.json",
+        string.format('{"success":%s,"error":"%s","fx_index":%d}', tostring(result.success), result.error or "", result.fx_index or -1))
 end
 
 function handle_fx_list_request(content)
