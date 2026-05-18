@@ -56,8 +56,8 @@ function handle_state_request()
     L[#L+1] = '"tracks":['
     for i, t in ipairs(tracks) do
         local comma = (i < #tracks) and "," or ""
-        L[#L+1] = string.format('{"number":%d,"name":"%s","volume":%.2f,"pan":%.2f,"mute":%s,"solo":%s,"armed":%s,"color":"%s","items":%d}%s',
-            t.number, t.name:gsub('"', '\\"'), t.volume, t.pan, tostring(t.mute), tostring(t.solo), tostring(t.armed), t.color, t.items, comma)
+        L[#L+1] = string.format('{"number":%d,"name":"%s","volume":%.2f,"pan":%.2f,"mute":%s,"solo":%s,"armed":%s,"color":"%s","items":%d,"fx":%d}%s',
+            t.number, t.name:gsub('"', '\\"'), t.volume, t.pan, tostring(t.mute), tostring(t.solo), tostring(t.armed), t.color, t.items, t.fx_count or 0, comma)
     end
     L[#L+1] = "]}"
     fwrite(COMM_DIR .. "audioshuttle_daw_state.json", table.concat(L, ""))
@@ -180,7 +180,6 @@ function handle_markers_trigger(content)
 end
 
 function handle_color_trigger(content)
-    -- Accept both "N:#RRGGBB" and "N #RRGGBB" formats
     local tn, ch = string.match(content, "(%d+)[: ]#(%x%x%x%x%x%x)")
     if not tn then return end
     local track = reaper.GetTrack(0, tonumber(tn) - 1)
@@ -191,6 +190,72 @@ function handle_color_trigger(content)
     local ci = reaper.ColorToNative(r, g, b) | 0x1000000
     reaper.SetTrackColor(track, ci)
     log("COLOR track " .. tn .. " = #" .. ch)
+end
+
+function handle_fx_trigger(content)
+    -- Format: command:track:arg1:arg2:...
+    local parts = {}
+    for p in string.gmatch(content, "[^:]+") do table.insert(parts, p) end
+    if #parts < 2 then return end
+    local cmd = parts[1]
+    local tn = tonumber(parts[2])
+    if not tn then return end
+    local track = reaper.GetTrack(0, tn - 1)
+    local result = {success = false, error = "unknown command: " .. cmd}
+    
+    if cmd == "add" and #parts >= 3 then
+        local fx_name = parts[3]
+        local idx = reaper.TrackFX_AddByName(track, fx_name, false, -1)
+        result = {success = idx >= 0, fx_index = idx, fx_name = fx_name}
+        log("FX add " .. fx_name .. " on t" .. tn .. " -> idx=" .. idx)
+    elseif cmd == "remove" and #parts >= 3 then
+        local fx_idx = tonumber(parts[3])
+        if fx_idx then
+            reaper.TrackFX_Delete(track, fx_idx)
+            result = {success = true, fx_index = fx_idx}
+        end
+    elseif cmd == "wet" and #parts >= 4 then
+        local fx_idx = tonumber(parts[3])
+        local wet = tonumber(parts[4])
+        if fx_idx and wet then
+            reaper.TrackFX_SetParamNormalized(track, fx_idx, 0, wet)
+            result = {success = true, wet = wet}
+        end
+    elseif cmd == "bypass" and #parts >= 4 then
+        local fx_idx = tonumber(parts[3])
+        local en = (parts[4] == "1" or parts[4] == "true")
+        if fx_idx then
+            reaper.TrackFX_SetEnabled(track, fx_idx, en)
+            result = {success = true, bypass = en}
+        end
+    end
+    -- Write result as JSON
+    local rjson = string.format('{"success":%s,"error":"%s","fx_index":%d}',
+        tostring(result.success), tostring(result.error or ""), result.fx_index or -1)
+    fwrite(COMM_DIR .. "audioshuttle_fx_result.json", rjson)
+end
+
+function handle_fx_list_request(content)
+    local parts = {}
+    for p in string.gmatch(content, "[^:]+") do table.insert(parts, p) end
+    local tn = parts[2] and tonumber(parts[2])
+    if not tn then return end
+    local track = reaper.GetTrack(0, tn - 1)
+    if not track then return end
+    local fxlist = {}
+    local fc = reaper.TrackFX_GetCount(track)
+    for fi = 0, fc - 1 do
+        local _, fx_name = reaper.TrackFX_GetFXName(track, fi, "")
+        table.insert(fxlist, {index = fi, name = fx_name or ""})
+    end
+    local json_parts = {"["}
+    for i, fx in ipairs(fxlist) do
+        json_parts[#json_parts+1] = string.format('{"index":%d,"name":"%s"}%s',
+            fx.index, fx.name:gsub('"', '\\"'), (i < #fxlist) and "," or "")
+    end
+    json_parts[#json_parts+1] = "]"
+    fwrite(COMM_DIR .. "audioshuttle_fx_list.json", table.concat(json_parts, ""))
+    log("FX list t" .. tn .. ": " .. fc .. " plugins")
 end
 
 -- ============================================================
@@ -220,6 +285,8 @@ function main_loop()
     process_trigger("audioshuttle_track_insert_trigger", handle_track_insert_trigger)
     process_trigger("audioshuttle_import_trigger", handle_import_trigger)
     process_trigger("audioshuttle_color_cmd.txt", handle_color_trigger)
+    process_trigger("audioshuttle_fx_trigger", handle_fx_trigger)
+    process_trigger("audioshuttle_fx_list_request", handle_fx_list_request)
     reaper.defer(main_loop)
 end
 
