@@ -2,33 +2,34 @@
 # AudioShuttle Demo Video Recorder
 # ================================
 # Records a ~2 minute demo of the full AudioShuttle pipeline:
-# voice/text commands → E4B translation → Reaper DAW control
+# text commands → Gemma 4 E4B translation → Reaper DAW control
+#
+# Uses gpu-screen-recorder for native Wayland/KDE capture (DP-2 = U28D590)
+# and launches the web UI alongside Reaper for side-by-side recording.
 #
 # Prerequisites:
-#   - Reaper running with a project open
+#   - Reaper running on the U28D590 (leftmost monitor)
 #   - AudioShuttle container running (docker compose up)
-#   - This script runs as korphaus on the host (needs XWayland access)
+#   - gpu-screen-recorder installed
+#   - Run as korphaus user on the host
 #
 # Usage:
-#   bash scripts/demo_video.sh          # Record with automated commands
-#   bash scripts/demo_video.sh --dry-run # Print commands without recording
+#   bash scripts/demo_video.sh           # Record full demo
+#   bash scripts/demo_video.sh --dry-run # Print commands only
+#   bash scripts/demo_video.sh --cmds    # Just run commands (no recording)
 
 set -euo pipefail
 
 # === CONFIG ===
-CAPTURE_X=0
-CAPTURE_Y=0
-CAPTURE_W=3072
-CAPTURE_H=1728
+MONITOR="DP-2"              # U28D590 (leftmost 4K monitor)
 FPS=30
 OUTPUT_DIR="/tmp/audioshuttle_demo"
-VIDEO_FILE="$OUTPUT_DIR/audioshuttle_demo.mp4"
+VIDEO_FILE="$OUTPUT_DIR/audioshuttle_demo_raw.mp4"
 FINAL_FILE="$OUTPUT_DIR/audioshuttle_demo_final.mp4"
-REPLAY_URL="http://localhost:8765/replay"
-STATE_URL="http://localhost:8765/state"
-DISPLAY=${DISPLAY:-:0}
 SUBTITLE_FILE="$OUTPUT_DIR/subs.ass"
 LOG_FILE="$OUTPUT_DIR/recording.log"
+REPLAY_URL="http://localhost:8765/replay"
+STATE_URL="http://localhost:8765/state"
 
 # Colors
 RED='\033[0;31m'
@@ -37,12 +38,16 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Timing between commands (seconds)
+# Timing
 CMD_DELAY=3
-SECTION_DELAY=5
 
 DRY_RUN=false
+CMDS_ONLY=false
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
+[[ "${1:-}" == "--cmds" ]] && CMDS_ONLY=true
+
+# GSR process
+GSR_PID=""
 
 # === SETUP ===
 mkdir -p "$OUTPUT_DIR"
@@ -56,150 +61,161 @@ send_cmd() {
     local cmd="$1"
     local desc="$2"
     local delay="${3:-$CMD_DELAY}"
-    
+
     log "CMD: $desc"
     log "  → \"$cmd\""
-    
+
     if $DRY_RUN; then
-        echo "  curl \"$REPLAY_URL?cmd=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$cmd'))")\""
+        local encoded
+        encoded=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$cmd'))")
+        echo "  curl \"$REPLAY_URL?cmd=$encoded\""
     else
         curl -s "$REPLAY_URL?cmd=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$cmd'))")" > /dev/null 2>&1
     fi
-    
+
     sleep "$delay"
 }
 
-# Check prerequisites
-log "Checking prerequisites..."
+# === PREREQUISITES ===
+check_prereqs() {
+    log "Checking prerequisites..."
 
-if ! curl -s "$STATE_URL" > /dev/null 2>&1; then
-    err "AudioShuttle not responding at $STATE_URL"
-    err "Start with: docker compose up -d"
-    exit 1
-fi
-ok "AudioShuttle server online"
+    if ! curl -s "$STATE_URL" > /dev/null 2>&1; then
+        err "AudioShuttle not responding at $STATE_URL"
+        err "Start with: cd ~/audioshuttle && docker compose up -d"
+        exit 1
+    fi
+    ok "AudioShuttle server online"
 
-if ! command -v ffmpeg &> /dev/null; then
-    err "ffmpeg not installed"
-    exit 1
-fi
-ok "ffmpeg available"
+    if ! command -v gpu-screen-recorder &> /dev/null; then
+        err "gpu-screen-recorder not installed"
+        err "Install with: sudo pacman -S gpu-screen-recorder"
+        exit 1
+    fi
+    ok "gpu-screen-recorder available"
 
-# Check Reaper window
-if ! DISPLAY=$DISPLAY wmctrl -lG 2>/dev/null | grep -q "REAPER"; then
-    warn "Reaper window not detected — make sure it's open"
-fi
+    if ! command -v ffmpeg &> /dev/null; then
+        err "ffmpeg not installed"
+        exit 1
+    fi
+    ok "ffmpeg available"
+}
+
+# === POSITION REAPER ===
+setup_reaper() {
+    log "Positioning Reaper on right half of $MONITOR..."
+
+    # Find Reaper window
+    local REAPER_WID
+    REAPER_WID=$(DISPLAY=:0 wmctrl -lG 2>/dev/null | grep -i "REAPER" | awk '{print $1}' | head -1)
+
+    if [ -z "$REAPER_WID" ]; then
+        warn "Reaper window not found — make sure it's open on $MONITOR"
+        return
+    fi
+
+    # Move Reaper to right 55% of the monitor (1920..3840, full height)
+    # gpu-screen-recorder captures the full monitor, so we want both windows visible
+    DISPLAY=:0 wmctrl -i -r "$REAPER_WID" -e 0,1728,0,2112,2160 2>/dev/null || true
+    ok "Reaper repositioned to right side"
+}
+
+# === LAUNCH WEB UI ===
+launch_webui() {
+    log "Launching AudioShuttle web UI on left side..."
+
+    # Kill any existing demo chromium
+    pkill -f "chromium.*audioshuttle_demo" 2>/dev/null || true
+    rm -rf /tmp/chromium_demo_profile 2>/dev/null || true
+    sleep 1
+
+    # Launch chromium sized to left 45% of the monitor
+    # Left side: 0..1728, full height
+    DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 chromium \
+        --class=audioshuttle_demo \
+        --user-data-dir=/tmp/chromium_demo_profile \
+        --no-first-run \
+        --disable-gpu \
+        --window-position=0,0 \
+        --window-size=1728,2160 \
+        "http://localhost:8765" &
+
+    CHROMIUM_PID=$!
+    sleep 4
+    ok "Web UI launched (PID $CHROMIUM_PID)"
+}
 
 # === GENERATE SUBTITLES ===
 generate_subtitles() {
     log "Generating subtitle file..."
-    
-    # ASS format subtitles with styling
+
     cat > "$SUBTITLE_FILE" << 'SUBHEADER'
 [Script Info]
 Title: AudioShuttle Demo
 ScriptType: v4.00+
-PlayResX: 3072
-PlayResY: 1728
+PlayResX: 3840
+PlayResY: 2160
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,30,30,60,1
-Style: Cmd,Arial,60,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,30,30,60,1
+Style: Default,Inter,80,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,5,2,2,60,60,80,1
+Style: Cmd,Inter,64,&H0000FFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,3,1,2,60,60,80,1
+Style: Title,Inter Bold,100,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,6,2,8,60,60,120,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 SUBHEADER
 
-    # Subtitle events — timed to match the command sequence
     cat >> "$SUBTITLE_FILE" << 'EVENTS'
-Dialogue: 0,0:00:00.00,0:00:04.00,Default,,0,0,0,,AudioShuttle — AI-powered DAW control
-Dialogue: 0,0:00:01.00,0:00:04.00,Cmd,,0,0,0,,Speak naturally. E4B translates. Reaper executes.
-Dialogue: 0,0:00:05.00,0:00:08.00,Default,,0,0,0,,"Create a rock project at 120 BPM"
-Dialogue: 0,0:00:05.00,0:00:08.00,Cmd,,0,0,0,,E4B generates full arrangement: tracks, buses, MIDI, FX
-Dialogue: 0,0:00:18.00,0:00:21.00,Default,,0,0,0,,"Play"
-Dialogue: 0,0:00:22.00,0:00:25.00,Default,,0,0,0,,"Increase the guitars bus by 3 dB"
-Dialogue: 0,0:00:26.00,0:00:29.00,Default,,0,0,0,,"Lower rhythm guitar 1 by 6 dB"
-Dialogue: 0,0:00:30.00,0:00:33.00,Default,,0,0,0,,"Mute the bass"
-Dialogue: 0,0:00:34.00,0:00:37.00,Default,,0,0,0,,"Rename track 5 to Synth Pad"
-Dialogue: 0,0:00:39.00,0:00:42.00,Default,,0,0,0,,"Wipe this, let's start a new metal track at 180 BPM"
-Dialogue: 0,0:00:39.00,0:00:42.00,Cmd,,0,0,0,,E4B wipes project + creates new genre with doubled instruments
-Dialogue: 0,0:00:55.00,0:00:58.00,Default,,0,0,0,,"Solo the drums"
-Dialogue: 0,0:00:59.00,0:01:02.00,Default,,0,0,0,,"Unmute the bass"
-Dialogue: 0,0:01:03.00,0:01:06.00,Default,,0,0,0,,"Add a marker called Bridge"
-Dialogue: 0,0:01:08.00,0:01:11.00,Default,,0,0,0,,"Set tempo to 160"
-Dialogue: 0,0:01:13.00,0:01:16.00,Default,,0,0,0,,"What tracks do I have?"
-Dialogue: 0,0:01:13.00,0:01:16.00,Cmd,,0,0,0,,E4B reads back the full track list
-Dialogue: 0,0:01:20.00,0:01:23.00,Default,,0,0,0,,"Stop"
-Dialogue: 0,0:01:25.00,0:01:35.00,Default,,0,0,0,,Built with Gemma 4 E4B — running locally on AMD ROCm
-Dialogue: 0,0:01:26.00,0:01:35.00,Cmd,,0,0,0,,Open source • Fully offline • Voice + text control
+Dialogue: 0,0:00:00.00,0:00:03.50,Title,,0,0,0,,AudioShuttle
+Dialogue: 0,0:00:00.50,0:00:03.50,Cmd,,0,0,0,,AI-powered DAW control with Gemma 4 E4B
+Dialogue: 0,0:00:05.00,0:00:09.00,Default,,0,0,0,,"create a rock project at 120 bpm"
+Dialogue: 0,0:00:05.50,0:00:09.00,Cmd,,0,0,0,,E4B generates: tracks, buses, MIDI, FX, routing
+Dialogue: 0,0:00:20.00,0:00:23.00,Default,,0,0,0,,play
+Dialogue: 0,0:00:24.00,0:00:27.00,Default,,0,0,0,,increase the guitars bus by 3 dB
+Dialogue: 0,0:00:28.00,0:00:31.00,Default,,0,0,0,,lower rhythm guitar 1 by 6 dB
+Dialogue: 0,0:00:32.00,0:00:35.00,Default,,0,0,0,,mute the bass
+Dialogue: 0,0:00:36.00,0:00:39.00,Default,,0,0,0,,rename track 5 to Synth Pad
+Dialogue: 0,0:00:41.00,0:00:45.00,Default,,0,0,0,,wipe this and create a metal project at 180 bpm
+Dialogue: 0,0:00:41.50,0:00:45.00,Cmd,,0,0,0,,Full wipe + new genre with doubled instruments
+Dialogue: 0,0:00:58.00,0:00:61.00,Default,,0,0,0,,solo the drums
+Dialogue: 0,0:00:62.00,0:00:65.00,Default,,0,0,0,,unmute the bass
+Dialogue: 0,0:00:66.00,0:00:69.00,Default,,0,0,0,,add a marker called Bridge
+Dialogue: 0,0:00:70.00,0:00:73.00,Default,,0,0,0,,set tempo to 160
+Dialogue: 0,0:00:74.00,0:00:78.00,Default,,0,0,0,,what tracks do I have
+Dialogue: 0,0:00:74.50,0:00:78.00,Cmd,,0,0,0,,E4B reads back the full track list
+Dialogue: 0,0:00:80.00,0:00:83.00,Default,,0,0,0,,stop
+Dialogue: 0,0:00:86.00,0:00:100.00,Title,,0,0,0,,Built with Gemma 4 E4B
+Dialogue: 0,0:00:87.00,0:00:100.00,Cmd,,0,0,0,,Running locally on AMD ROCm • Open source • Fully offline
 EVENTS
 
     ok "Subtitles written to $SUBTITLE_FILE"
 }
 
-# === LAUNCH CHROMIUM (X11 MODE) ===
-launch_chromium() {
-    log "Launching Chromium in X11 mode on left side of monitor..."
-    
-    # Kill any existing demo chromium
-    pkill -f "chromium.*audioshuttle_demo" 2>/dev/null || true
-    sleep 1
-    
-    # Launch chromium with X11 backend, sized to fill left half of U28D590
-    # Left half: 0,0 to ~2510,1728
-    DISPLAY=$DISPLAY chromium \
-        --class=audioshuttle_demo \
-        --user-data-dir=/tmp/chromium_demo_profile \
-        --no-first-run \
-        --disable-gpu \
-        --start-maximized \
-        --window-position=0,0 \
-        --window-size=2500,1728 \
-        "http://localhost:8765" &
-    
-    CHROMIUM_PID=$!
-    sleep 3
-    
-    # Position chromium precisely with wmctrl
-    DISPLAY=$DISPLAY wmctrl -r "audioshuttle_demo" -e 0,0,0,2500,1728 2>/dev/null || true
-    # Or find by PID
-    local WID=$(DISPLAY=$DISPLAY wmctrl -l | grep -i "audioshuttle\|localhost:8765" | awk '{print $1}' | head -1)
-    if [ -n "$WID" ]; then
-        DISPLAY=$DISPLAY wmctrl -i -r "$WID" -e 0,0,0,2500,1728 2>/dev/null || true
-    fi
-    
-    ok "Chromium launched (PID $CHROMIUM_PID)"
-}
-
 # === RECORD SCREEN ===
 start_recording() {
-    log "Starting screen recording..."
-    log "  Capture: ${CAPTURE_W}x${CAPTURE_H} at +${CAPTURE_X}+${CAPTURE_Y}"
-    log "  Output:  $VIDEO_FILE"
-    
-    DISPLAY=$DISPLAY ffmpeg -y \
-        -f x11grab \
-        -video_size ${CAPTURE_W}x${CAPTURE_H} \
-        -framerate $FPS \
-        -i ${CAPTURE_X},${CAPTURE_Y} \
-        -c:v libx264 \
-        -preset fast \
-        -crf 18 \
-        -pix_fmt yuv420p \
-        "$VIDEO_FILE" \
+    log "Starting gpu-screen-recorder on $MONITOR..."
+    log "  Output: $VIDEO_FILE"
+
+    rm -f "$VIDEO_FILE"
+
+    gpu-screen-recorder \
+        -w "$MONITOR" \
+        -f $FPS \
+        -k h264 \
+        -q high \
+        -o "$VIDEO_FILE" \
         > "$LOG_FILE" 2>&1 &
-    
-    FFMPEG_PID=$!
+
+    GSR_PID=$!
     sleep 2
-    
-    # Verify it's recording
-    if kill -0 $FFMPEG_PID 2>/dev/null; then
-        ok "Recording started (PID $FFMPEG_PID)"
+
+    if kill -0 $GSR_PID 2>/dev/null; then
+        ok "Recording started (PID $GSR_PID)"
     else
-        err "ffmpeg failed to start. Check $LOG_FILE"
+        err "gpu-screen-recorder failed. Check $LOG_FILE"
         cat "$LOG_FILE"
         exit 1
     fi
@@ -207,102 +223,109 @@ start_recording() {
 
 stop_recording() {
     log "Stopping recording..."
-    kill -INT $FFMPEG_PID 2>/dev/null || true
-    wait $FFMPEG_PID 2>/dev/null || true
+    if [ -n "$GSR_PID" ] && kill -0 $GSR_PID 2>/dev/null; then
+        kill -INT $GSR_PID 2>/dev/null || true
+        wait $GSR_PID 2>/dev/null || true
+    fi
+    sleep 1
     ok "Recording saved to $VIDEO_FILE"
+    ls -lh "$VIDEO_FILE" 2>/dev/null
 }
 
 # === COMMAND SEQUENCE ===
 run_commands() {
+    local t=0
     log "=== Starting command sequence ==="
-    log "Total estimated time: ~90 seconds"
     echo ""
-    
-    # ---- SECTION 1: Project Creation (0:00 - 0:18) ----
-    log "SECTION 1: Create rock project"
+
+    # SECTION 1: Create rock project (t=0..18)
+    log "SECTION 1: Create rock project [t=${t}s]"
     send_cmd "create a rock project at 120 bpm" \
-        "Create full rock arrangement: drums, bass, guitars, keys + bus routing" \
+        "Full arrangement: tracks, buses, MIDI, FX, routing" \
         15
-    sleep 3
-    
-    # ---- SECTION 2: Mix Adjustments (0:18 - 0:38) ----
-    log "SECTION 2: Mix adjustments"
-    
-    send_cmd "play" \
-        "Start playback" \
-        3
-    
-    send_cmd "increase the guitars bus by 3 dB" \
-        "Adjust bus volume" \
-        3
-    
-    send_cmd "lower rhythm guitar 1 by 6 dB" \
-        "Adjust specific track with doubled instrument variant" \
-        3
-    
-    send_cmd "mute the bass" \
-        "Mute a track" \
-        3
-    
-    send_cmd "rename track 5 to Synth Pad" \
-        "Rename a track" \
-        3
-    
-    # ---- SECTION 3: Wipe & New Genre (0:38 - 0:55) ----
-    log "SECTION 3: Wipe and recreate"
-    
-    send_cmd "wipe this and create a metal project at 180 bpm" \
-        "Full wipe + new genre with doubled instruments and bus routing" \
-        15
+    t=$((t + 18))
     sleep 2
-    
-    # ---- SECTION 4: More Commands (0:55 - 1:20) ----
-    log "SECTION 4: Advanced commands"
-    
+
+    # SECTION 2: Mix adjustments (t=20..40)
+    log "SECTION 2: Mix adjustments [t=${t}s]"
+
+    send_cmd "play" \
+        "Start playback" 3
+    t=$((t + 4))
+
+    send_cmd "increase the guitars bus by 3 dB" \
+        "Bus volume" 3
+    t=$((t + 4))
+
+    send_cmd "lower rhythm guitar 1 by 6 dB" \
+        "Specific doubled-instrument variant" 3
+    t=$((t + 4))
+
+    send_cmd "mute the bass" \
+        "Mute track" 3
+    t=$((t + 4))
+
+    send_cmd "rename track 5 to Synth Pad" \
+        "Rename track" 3
+    t=$((t + 4))
+
+    # SECTION 3: Wipe and recreate (t=41..57)
+    log "SECTION 3: Wipe + metal project [t=${t}s]"
+
+    send_cmd "wipe this and create a metal project at 180 bpm" \
+        "Full wipe + new genre with doubled instruments" \
+        15
+    t=$((t + 17))
+    sleep 2
+
+    # SECTION 4: More commands (t=58..80)
+    log "SECTION 4: Advanced commands [t=${t}s]"
+
     send_cmd "solo the drums" \
-        "Solo a track" \
-        3
-    
+        "Solo" 3
+    t=$((t + 4))
+
     send_cmd "unmute the bass" \
-        "Unmute" \
-        3
-    
+        "Unmute" 3
+    t=$((t + 4))
+
     send_cmd "add a marker called Bridge" \
-        "Add named marker" \
-        3
-    
+        "Named marker" 3
+    t=$((t + 4))
+
     send_cmd "set tempo to 160" \
-        "Change tempo" \
-        3
-    
+        "Tempo change" 3
+    t=$((t + 4))
+
     send_cmd "what tracks do I have" \
-        "Discovery: list all tracks with state" \
-        5
-    
-    # ---- SECTION 5: Wrap up (1:20 - 1:30) ----
-    log "SECTION 5: Wrap up"
-    
+        "Discovery: state readback" 5
+    t=$((t + 6))
+
+    # SECTION 5: Wrap up (t=80..85)
+    log "SECTION 5: Wrap up [t=${t}s]"
+
     send_cmd "stop" \
-        "Stop playback" \
-        3
-    
-    log "=== Command sequence complete ==="
+        "Stop playback" 3
+    t=$((t + 3))
+
+    log "=== Command sequence complete (${t}s elapsed) ==="
 }
 
-# === ADD SUBTITLES ===
+# === ADD SUBTITLES + COMPRESS ===
 add_subtitles() {
-    log "Burning in subtitles..."
-    
+    log "Burning in subtitles and compressing..."
+
     ffmpeg -y \
         -i "$VIDEO_FILE" \
         -vf "ass=$SUBTITLE_FILE" \
         -c:v libx264 \
-        -preset fast \
-        -crf 18 \
+        -preset medium \
+        -crf 20 \
         -pix_fmt yuv420p \
+        -movflags +faststart \
         "$FINAL_FILE" \
         2>> "$LOG_FILE"
-    
+
     ok "Final video: $FINAL_FILE"
     ls -lh "$FINAL_FILE"
 }
@@ -310,64 +333,71 @@ add_subtitles() {
 # === CLEANUP ===
 cleanup() {
     log "Cleaning up..."
-    
-    # Stop recording if still running
-    if [ -n "${FFMPEG_PID:-}" ] && kill -0 $FFMPEG_PID 2>/dev/null; then
+
+    if [ -n "${GSR_PID:-}" ] && kill -0 $GSR_PID 2>/dev/null; then
         stop_recording
     fi
-    
-    # Kill demo chromium
+
     pkill -f "chromium.*audioshuttle_demo" 2>/dev/null || true
     rm -rf /tmp/chromium_demo_profile 2>/dev/null || true
-    
+
     log "Done!"
 }
-
 trap cleanup EXIT
 
 # === MAIN ===
 main() {
     echo ""
-    echo "========================================"
+    echo "============================================"
     echo "  AudioShuttle Demo Video Recorder"
-    echo "========================================"
+    echo "  Monitor: $MONITOR (3840x2160)"
+    echo "============================================"
     echo ""
-    
+
+    check_prereqs
     generate_subtitles
-    
+
     if $DRY_RUN; then
         log "DRY RUN — printing commands without executing"
         echo ""
         run_commands
         exit 0
     fi
-    
-    launch_chromium
+
+    if $CMDS_ONLY; then
+        log "COMMANDS ONLY — running commands without recording"
+        echo ""
+        run_commands
+        exit 0
+    fi
+
+    # Set up layout: Reaper right, web UI left
+    setup_reaper
+    launch_webui
     sleep 2
-    
-    log "Press Ctrl+C to stop recording at any time"
-    log "Recording will auto-stop after the command sequence"
-    echo ""
-    sleep 2
-    
+
+    log "Starting in 3 seconds... Press Ctrl+C to cancel"
+    sleep 3
+
     start_recording
-    sleep 3  # Let the recording capture the initial state
-    
+    sleep 3  # Capture initial state
+
     run_commands
-    
-    # Hold for 5 seconds to show final state
-    sleep 5
-    
+
+    # Hold final state for 8 seconds (end card time)
+    log "Holding final state for 8 seconds..."
+    sleep 8
+
     stop_recording
     add_subtitles
-    
+
     echo ""
     ok "Demo video complete!"
     echo ""
-    echo "  Raw recording:  $VIDEO_FILE"
+    echo "  Raw recording:   $VIDEO_FILE"
     echo "  Final (subtitled): $FINAL_FILE"
     echo ""
-    log "To preview: mpv $FINAL_FILE"
+    log "Preview: mpv $FINAL_FILE"
 }
 
 main "$@"

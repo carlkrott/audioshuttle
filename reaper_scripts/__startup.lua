@@ -115,65 +115,54 @@ function handle_track_insert_trigger(content)
 end
 
 function handle_import_trigger(content)
-    log("IMPORT: " .. content)
-    local track_num, role = nil, nil
-    for part in string.gmatch(content, "[^:]+") do
-        if part ~= "import" and part ~= "track" then
-            local n = tonumber(part)
-            if n and not track_num then track_num = n
-            elseif not role and not n then role = part end
-        end
-    end
-    local midi_path = nil
-    if role then
-        midi_path = TMP_DIR .. "audioshuttle_" .. role .. ".mid"
-        if not fexists(midi_path) then midi_path = TMP_DIR .. "audioshuttle_pattern.mid" end
-    else
-        local roles = {"drums","bass","keys","lead_guitar","rhythm_guitar","vocals","synth"}
-        for _, r in ipairs(roles) do
-            local p = TMP_DIR .. "audioshuttle_" .. r .. ".mid"
-            if fexists(p) then midi_path = p; role = r; break end
-        end
-        if not midi_path then midi_path = TMP_DIR .. "audioshuttle_pattern.mid" end
-    end
-    if not fexists(midi_path) then log("IMPORT: no file " .. tostring(midi_path)); return end
-    -- InsertMedia(mode=0) inserts at edit cursor on first selected track.
-    -- Strategy: select only track 1, insert, then move to target track.
-    local t1 = reaper.GetTrack(0, 0)
-    if not t1 then log("IMPORT: no track 1"); return end
+      log("IMPORT: " .. content)
+      local track_num, role = nil, nil
+      for part in string.gmatch(content, "[^:]+") do
+          if part ~= "import" and part ~= "track" then
+              local n = tonumber(part)
+              if n and not track_num then track_num = n
+              elseif not role and not n then role = part end
+          end
+      end
+      local midi_path = nil
+      if role then
+          midi_path = TMP_DIR .. "audioshuttle_" .. role .. ".mid"
+          if not fexists(midi_path) then midi_path = TMP_DIR .. "audioshuttle_pattern.mid" end
+      else
+          local roles = {"drums","bass","keys","lead_guitar","rhythm_guitar","vocals","synth"}
+          for _, r in ipairs(roles) do
+              local p = TMP_DIR .. "audioshuttle_" .. r .. ".mid"
+              if fexists(p) then midi_path = p; role = r; break end
+              end
+          if not midi_path then midi_path = TMP_DIR .. "audioshuttle_pattern.mid" end
+      end
+      if not fexists(midi_path) then log("IMPORT: no file " .. tostring(midi_path)); return end
+      if not track_num then log("IMPORT: no track number"); return end
+      local tgt = reaper.GetTrack(0, track_num - 1)
+      if not tgt then log("IMPORT: track " .. track_num .. " not found"); return end
 
-    -- Deselect all tracks, then select only track 1
-    for i = 0, reaper.CountTracks(0) - 1 do
-        reaper.SetTrackSelected(reaper.GetTrack(0, i), false)
-    end
-    reaper.SetTrackSelected(t1, true)
+      -- APPROACH: Bypass InsertMedia entirely.
+      -- Use AddMediaItemToTrack + AddTakeToMediaItem + SetItemTakeSource.
+      -- This directly creates a MIDI item on the target track with zero selection dependency.
+      reaper.SetEditCurPos(0, false, false)
 
-    local before = reaper.CountTrackMediaItems(t1)
-    reaper.SetEditCurPos(0, false, false)
-    reaper.InsertMedia(midi_path, 0)
-    local after = reaper.CountTrackMediaItems(t1)
-    
-    if after > before and track_num and track_num ~= 1 then
-        local tgt = reaper.GetTrack(0, track_num - 1)
-        if tgt then
-            local item = reaper.GetTrackMediaItem(t1, after - 1)
-            log("IMPORT DEBUG: t1_items=" .. reaper.CountTrackMediaItems(t1) .. " moving idx=" .. (after-1))
-            if item then
-                local move_ok, move_err = pcall(reaper.MoveMediaItemToTrack, item, tgt)
-                log("IMPORT DEBUG: after move t1=" .. reaper.CountTrackMediaItems(t1) .. " t" .. track_num .. "=" .. reaper.CountTrackMediaItems(tgt))
-                if move_ok then
-                    log("IMPORT OK: " .. midi_path .. " moved to track " .. track_num)
-                else
-                    log("IMPORT: " .. midi_path .. " on track 1 (move failed)")
-                end
-            end
-        end
-    elseif after > before then
-        log("IMPORT OK: " .. midi_path .. " on track 1")
-    else
-        log("IMPORT: " .. midi_path .. " no item created (before=" .. before .. " after=" .. after .. ")")
-    end
-end
+      local item = reaper.AddMediaItemToTrack(tgt)
+      local take = reaper.AddTakeToMediaItem(item)
+      local pcm_src = reaper.PCM_Source_CreateFromFile(midi_path)
+      if pcm_src then
+          reaper.SetMediaItemTake_Source(take, pcm_src)
+          -- Get length from source
+          local length = reaper.GetMediaSourceLength(pcm_src)
+          if length > 0 then
+              reaper.SetMediaItemInfo_Value(item, "D_LENGTH", length)
+          end
+          reaper.UpdateArrange()
+          log("IMPORT OK: " .. midi_path .. " -> track " .. track_num .. " (direct API, len=" .. string.format("%.2f", length) .. ")")
+      else
+          reaper.DeleteTrackMediaItem(tgt, item)
+          log("IMPORT FAIL: " .. midi_path .. " PCM_Source_CreateFromFile returned nil")
+      end
+  end
 
 function handle_markers_trigger(content)
     log("MARKERS raw: " .. content:gsub("\n","|"))
