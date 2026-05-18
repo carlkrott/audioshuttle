@@ -276,7 +276,34 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             if tool_name in ("list_tracks", "get_transport", "get_daw_state", "get_track_count"):
                 executed.append({"tool": tool_name, "action": "query", "note": "State query"})
                 continue
+            
+            # CRITICAL: pause and refresh state before project-level operations
+            import time as _time
+            if tool_name == "wipe_project":
+                _time.sleep(0.5)
+            
             cmd_result = _execute_tool(tool_name, tool_args)
+            
+            # After wipe: refresh state so next tool sees clean slate
+            if tool_name == "wipe_project":
+                _time.sleep(1.0)
+                if hasattr(bridge, "refresh_state"):
+                    try:
+                        bridge.refresh_state(wait=0.5)
+                    except Exception:
+                        pass
+            
+            # Delay between tools
+            delay = r.delay_ms or 0
+            if delay == 0 and i < total - 1:
+                if tool_name == "wipe_project":
+                    delay = 1000
+                elif tool_name in ("insert_track", "rename_track"):
+                    delay = 200
+                elif tool_name == "insert_midi_pattern":
+                    delay = 500
+            if delay > 0:
+                _time.sleep(delay / 1000.0)
             if cmd_result is None:
                 errors.append(f"Unknown tool: {tool_name}")
                 continue
