@@ -3238,6 +3238,18 @@ class ReaperOSC:
                         result_data = f.read()
                     _os.remove(done_path)
                     logger.info("wipe_project: completed — %s", result_data[:100])
+                    
+                    # Verify state: request fresh state dump and confirm cleared
+                    import time as _t2
+                    for verify_attempt in range(10):
+                        _t2.sleep(0.3)
+                        if hasattr(self, "state") and hasattr(self.state, "track_count"):
+                            self.refresh_state(wait=0.3)
+                            track_count = getattr(self.state, "track_count", -1)
+                            if track_count == 0:
+                                logger.info("wipe_project: verified — 0 tracks")
+                                break
+                    
                     return CommandResult(
                         success=True,
                         address="/project/wipe",

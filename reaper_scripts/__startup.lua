@@ -65,12 +65,18 @@ function handle_state_request()
 end
 
 function handle_wipe_trigger()
-    log("WIPE")
+    -- Delete markers first (direct API, more reliable than Main_OnCommand)
+    local mc = reaper.CountProjectMarkers(0)
+    for i = mc - 1, 0, -1 do
+        local _, isrgn = reaper.EnumProjectMarkers(i)
+        reaper.DeleteProjectMarker(0, i, isrgn)
+    end
+    -- Delete tracks
     reaper.Main_OnCommand(40297, 0)
     local c = reaper.CountTracks(0)
     for i = c - 1, 0, -1 do reaper.DeleteTrack(reaper.GetTrack(0, i)) end
-    reaper.Main_OnCommand(40613, 0)
     reaper.SetCurrentBPM(0, 120, true)
+    log("WIPE: done, " .. c .. " tracks, " .. mc .. " markers")
     fwrite(COMM_DIR .. "audioshuttle_wipe_done", "ok")
 end
 
