@@ -692,9 +692,10 @@ class ReaperOSC:
             os.remove(trigger_path)
         except OSError:
             pass
-        with open(trigger_path, "w") as f:
-            f.write(trigger_content)
-        self._chown_to_reaper(trigger_path)
+        try:
+            with open(trigger_path, "w") as f:
+                f.write(trigger_content)
+            self._chown_to_reaper(trigger_path)
         except OSError:
             pass
 

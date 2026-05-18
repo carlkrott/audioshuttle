@@ -636,14 +636,8 @@ end
 
 -- ============================================================
 -- STARTUP
--- ============================================================
-
--- Ensure communication directory exists
-os.execute("mkdir -p " .. COMM_DIR)
-
--- Write initial heartbeat
-tick = 0
-write_heartbeat()
-
--- Start the defer loop
+os.execute("mkdir -p " .. COMM_DIR .. " && chmod 777 " .. COMM_DIR)
+-- Clear debug log on fresh start
+local f = io.open("/tmp/watcher_debug.log", "w")
+if f then f:write("WATCHER v3 STARTED\n"); f:close() end
 reaper.defer(main_loop)
