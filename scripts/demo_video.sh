@@ -171,24 +171,25 @@ SUBHEADER
     cat >> "$SUBTITLE_FILE" << 'EVENTS'
 Dialogue: 0,0:00:00.00,0:00:03.50,Title,,0,0,0,,AudioShuttle
 Dialogue: 0,0:00:00.50,0:00:03.50,Cmd,,0,0,0,,AI-powered DAW control with Gemma 4 E4B
-Dialogue: 0,0:00:05.00,0:00:09.00,Default,,0,0,0,,"create a rock project at 120 bpm"
-Dialogue: 0,0:00:05.50,0:00:09.00,Cmd,,0,0,0,,E4B generates: tracks, buses, MIDI, FX, routing
-Dialogue: 0,0:00:20.00,0:00:23.00,Default,,0,0,0,,play
-Dialogue: 0,0:00:24.00,0:00:27.00,Default,,0,0,0,,increase the guitars bus by 3 dB
-Dialogue: 0,0:00:28.00,0:00:31.00,Default,,0,0,0,,lower rhythm guitar 1 by 6 dB
-Dialogue: 0,0:00:32.00,0:00:35.00,Default,,0,0,0,,mute the bass
-Dialogue: 0,0:00:36.00,0:00:39.00,Default,,0,0,0,,rename track 5 to Synth Pad
-Dialogue: 0,0:00:41.00,0:00:45.00,Default,,0,0,0,,wipe this and create a metal project at 180 bpm
-Dialogue: 0,0:00:41.50,0:00:45.00,Cmd,,0,0,0,,Full wipe + new genre with doubled instruments
-Dialogue: 0,0:00:58.00,0:00:61.00,Default,,0,0,0,,solo the drums
-Dialogue: 0,0:00:62.00,0:00:65.00,Default,,0,0,0,,unmute the bass
-Dialogue: 0,0:00:66.00,0:00:69.00,Default,,0,0,0,,add a marker called Bridge
-Dialogue: 0,0:00:70.00,0:00:73.00,Default,,0,0,0,,set tempo to 160
-Dialogue: 0,0:00:74.00,0:00:78.00,Default,,0,0,0,,what tracks do I have
-Dialogue: 0,0:00:74.50,0:00:78.00,Cmd,,0,0,0,,E4B reads back the full track list
-Dialogue: 0,0:00:80.00,0:00:83.00,Default,,0,0,0,,stop
-Dialogue: 0,0:00:86.00,0:00:100.00,Title,,0,0,0,,Built with Gemma 4 E4B
-Dialogue: 0,0:00:87.00,0:00:100.00,Cmd,,0,0,0,,Running locally on AMD ROCm • Open source • Fully offline
+Dialogue: 0,0:00:05.00,0:00:10.00,Default,,0,0,0,,"create a rock project at 120 bpm"
+Dialogue: 0,0:00:05.50,0:00:10.00,Cmd,,0,0,0,,E4B generates: tracks, buses, MIDI, FX, routing
+Dialogue: 0,0:00:40.00,0:00:43.00,Default,,0,0,0,,7 tracks, 9 markers, buses, MIDI — all from one sentence
+Dialogue: 0,0:00:45.00,0:00:48.00,Default,,0,0,0,,play
+Dialogue: 0,0:00:49.00,0:00:52.00,Default,,0,0,0,,increase the guitars bus by 3 dB
+Dialogue: 0,0:00:53.00,0:00:56.00,Default,,0,0,0,,lower rhythm guitar 1 by 6 dB
+Dialogue: 0,0:00:57.00,0:01:00.00,Default,,0,0,0,,mute the bass
+Dialogue: 0,0:01:01.00,0:01:04.00,Default,,0,0,0,,rename track 5 to Synth Pad
+Dialogue: 0,0:01:06.00,0:01:10.00,Default,,0,0,0,,wipe this and create a metal project at 180 bpm
+Dialogue: 0,0:01:06.50,0:01:10.00,Cmd,,0,0,0,,Full wipe + new genre with doubled instruments
+Dialogue: 0,0:01:35.00,0:01:38.00,Default,,0,0,0,,solo the drums
+Dialogue: 0,0:01:39.00,0:01:42.00,Default,,0,0,0,,unmute the bass
+Dialogue: 0,0:01:43.00,0:01:46.00,Default,,0,0,0,,add a marker called Bridge
+Dialogue: 0,0:01:47.00,0:01:50.00,Default,,0,0,0,,set tempo to 160
+Dialogue: 0,0:01:51.00,0:01:55.00,Default,,0,0,0,,what tracks do I have
+Dialogue: 0,0:01:51.50,0:01:55.00,Cmd,,0,0,0,,E4B reads back the full track list
+Dialogue: 0,0:01:57.00,0:02:00.00,Default,,0,0,0,,stop
+Dialogue: 0,0:02:05.00,0:02:20.00,Title,,0,0,0,,Built with Gemma 4 E4B
+Dialogue: 0,0:02:06.00,0:02:20.00,Cmd,,0,0,0,,Running locally on AMD ROCm • Open source • Fully offline
 EVENTS
 
     ok "Subtitles written to $SUBTITLE_FILE"
@@ -238,12 +239,12 @@ run_commands() {
     log "=== Starting command sequence ==="
     echo ""
 
-    # SECTION 1: Create rock project (t=0..18)
+    # SECTION 1: Create rock project (t=0..45)
     log "SECTION 1: Create rock project [t=${t}s]"
     send_cmd "create a rock project at 120 bpm" \
         "Full arrangement: tracks, buses, MIDI, FX, routing" \
-        15
-    t=$((t + 18))
+        42
+    t=$((t + 44))
     sleep 2
 
     # SECTION 2: Mix adjustments (t=20..40)
@@ -269,13 +270,13 @@ run_commands() {
         "Rename track" 3
     t=$((t + 4))
 
-    # SECTION 3: Wipe and recreate (t=41..57)
+    # SECTION 3: Wipe and recreate (t=41..85)
     log "SECTION 3: Wipe + metal project [t=${t}s]"
 
     send_cmd "wipe this and create a metal project at 180 bpm" \
         "Full wipe + new genre with doubled instruments" \
-        15
-    t=$((t + 17))
+        42
+    t=$((t + 44))
     sleep 2
 
     # SECTION 4: More commands (t=58..80)
