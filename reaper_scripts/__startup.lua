@@ -174,7 +174,8 @@ function handle_markers_trigger(content)
 end
 
 function handle_color_trigger(content)
-    local tn, ch = string.match(content, "(%d+):#(%x%x%x%x%x%x)")
+    -- Accept both "N:#RRGGBB" and "N #RRGGBB" formats
+    local tn, ch = string.match(content, "(%d+)[: ]#(%x%x%x%x%x%x)")
     if not tn then return end
     local track = reaper.GetTrack(0, tonumber(tn) - 1)
     if not track then return end

@@ -1,0 +1,55 @@
+{"ts": 1779096243.0645223, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called TestDrive at 130 bpm"}
+{"ts": 1779096249.6512353, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779096249.651319, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779096456.6634362, "type": "content_token", "source": "stt", "text": "Heard: wipe the project"}
+{"ts": 1779096457.625738, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779096463.4348884, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called Demo at 130 bpm"}
+{"ts": 1779096466.4599535, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779096851.1023126, "type": "content_token", "source": "stt", "text": "Heard: wipe the project"}
+{"ts": 1779096852.0091984, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779097778.9677927, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called FinalTest at 130 bpm"}
+{"ts": 1779097782.6227083, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779098055.67231, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called WatcherTest at 130 bpm"}
+{"ts": 1779098060.0327425, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779098060.0328243, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779098337.4168665, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called DemoTest at 130 bpm"}
+{"ts": 1779098342.6055732, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779098342.6056545, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779098348.855488, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called Now at 130 bpm"}
+{"ts": 1779098352.4194522, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779098858.7153873, "type": "content_token", "source": "stt", "text": "Heard: wipe the project"}
+{"ts": 1779098859.6198823, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779098864.8887882, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called WorksNow at 130 bpm"}
+{"ts": 1779098868.6205544, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779098980.526124, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called FinalE2E at 130 bpm"}
+{"ts": 1779098985.5391774, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779098985.5392668, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779098986.378099, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called FinalE2E at 130 bpm"}
+{"ts": 1779098990.5765495, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779099225.9313016, "type": "content_token", "source": "stt", "text": "Heard: CAN YOU WIPE THE CURRENT PROJECT?"}
+{"ts": 1779099226.7994149, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779099244.578019, "type": "content_token", "source": "stt", "text": "Heard: can you set up an r&b project?"}
+{"ts": 1779099253.0930192, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"soul\"})"}
+{"ts": 1779099983.6844423, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called V4Test at 130 bpm"}
+{"ts": 1779099986.9510067, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779100648.5478914, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called V4Final at 130 bpm"}
+{"ts": 1779100652.732523, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779100652.7325983, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779101575.2255187, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called FinalDemo at 130 bpm"}
+{"ts": 1779101578.84358, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779102447.1362212, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called V5Test at 130 bpm"}
+{"ts": 1779102450.4414773, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779103240.8649662, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called FinalV5 at 130 bpm"}
+{"ts": 1779103245.205651, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779103245.2057407, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779106866.9506857, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called FinalV6 at 130 bpm"}
+{"ts": 1779106870.2701807, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779111278.9559026, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called V6Final at 130 bpm"}
+{"ts": 1779111283.1030495, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779111974.445545, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called FinalV7 at 130 bpm"}
+{"ts": 1779111979.443151, "type": "tool_call", "source": "translator", "text": "wipe_project({})"}
+{"ts": 1779111979.443227, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779112622.5906932, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called V8Final at 130 bpm"}
+{"ts": 1779112626.0890274, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
+{"ts": 1779113022.3459163, "type": "content_token", "source": "stt", "text": "Heard: create a rock project called DebugV9 at 130 bpm"}
+{"ts": 1779113025.6357744, "type": "tool_call", "source": "translator", "text": "create_genre_project({\"genre\": \"rock\", \"tempo\": 130})"}
